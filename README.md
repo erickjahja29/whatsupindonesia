@@ -41,6 +41,11 @@ cukup dijalankan sekali.
 2. Settings → Pages → Source: **GitHub Actions**.
 3. Actions → "Perbarui data & terbitkan situs" → Run workflow. Setelah itu berjalan otomatis tiap 15 menit.
 
+## Hak cipta
+© 2026 **Erick Jahja**. Seluruh hak dilindungi (*All rights reserved*) — lihat [LICENSE](LICENSE).
+Kode dipublikasikan untuk dilihat sebagai portofolio; penggunaan, penyalinan, atau penerbitan ulang
+memerlukan izin tertulis.
+
 ## Atribusi data
 BMKG · USGS · NASA FIRMS · PetaBencana.id · BNPB · media (Google News) · geoBoundaries (ODbL, © OpenStreetMap
 contributors) · OpenFreeMap / OpenMapTiles / © OpenStreetMap contributors (peta dasar).

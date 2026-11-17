@@ -65,6 +65,7 @@ svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2
 .info { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11.5px; color: #b8c3cf;
   animation: fadeDown .3s var(--ease-out); }
 .info p { margin: 0 0 6px; }
+.info .credit { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); }
 @keyframes fadeDown { from { opacity: 0; transform: translateY(-6px); } }
 
 /* ---------- ticker (atas tengah) ---------- */
