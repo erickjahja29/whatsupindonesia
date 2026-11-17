@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>What'sUpIndonesia — Ada apa di Indonesia hari ini?</title>
+  <meta name="description" content="Peta live gempa, titik panas karhutla, dan laporan bencana warga di seluruh Indonesia dalam satu tempat.">
+  <meta name="theme-color" content="#07090d">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23ff4d4f'/><circle cx='16' cy='16' r='6' fill='white'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="style.css?v=51">
+</head>
+<body>
+  <div id="map" aria-label="Peta Indonesia"></div>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <!-- Kiri atas: identitas, transparan -->
+  <header id="brand" class="glass brand ui-in" style="--d:0">
+    <div class="brand-row">
+      <button id="logo" class="logo" title="Kembali ke semua lapisan" aria-label="What'sUpIndonesia — kembali ke semua lapisan">What'sUp<b>Indonesia</b></button>
+      <span class="live"><i></i>LIVE</span>
+      <button id="info-btn" class="icon-btn" aria-label="Tentang data" aria-expanded="false">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+      </button>
+    </div>
+    <div id="updated" class="updated">Memuat data…</div>
+    <div id="info" class="info" hidden>
+      <p><b>Bukan sumber resmi.</b> Info resmi:
+        <a href="https://www.bmkg.go.id/" target="_blank" rel="noopener">BMKG</a> ·
+        <a href="https://bnpb.go.id/" target="_blank" rel="noopener">BNPB</a> ·
+        <a href="https://sipongi.menlhk.go.id/" target="_blank" rel="noopener">SiPongi</a></p>
+      <p>Peringatan tsunami resmi hanya dari <a href="https://www.bmkg.go.id/gempabumi" target="_blank" rel="noopener">BMKG</a>.
+        Titik panas = deteksi panas satelit, belum tentu kebakaran.</p>
+      <p>Data: BMKG / USGS (gempa), NASA FIRMS (titik panas), PetaBencana.id (laporan warga), media (berita; judul
+        dicocokkan otomatis, baca di situs aslinya), geoBoundaries & OpenStreetMap (peta).</p>
+    </div>
+  </header>
+
+  <!-- Atas tengah: ticker live -->
+  <div id="ticker" class="glass ticker ui-in" style="--d:1" role="button" tabindex="0" aria-live="polite" hidden>
+    <div id="tk-body" class="tk-body"></div>
+    <div id="tk-dots" class="tk-dots"></div>
+    <div class="tk-progress"><i id="tk-bar"></i></div>
+  </div>
+
+  <!-- Bawah tengah: dock lapisan -->
+  <nav id="dock" class="glass dock ui-in" style="--d:2" aria-label="Lapisan peta">
+    <button class="dock-btn" data-mode="gempa" style="--c:#ff4d4f" aria-pressed="false">
+      <span class="dock-ic"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
+      <span class="dock-txt"><b class="num" id="n-gempa">0</b><small>Gempa · 7 hari</small></span>
+    </button>
+    <button class="dock-btn" data-mode="titik_panas" style="--c:#ff6a1a" aria-pressed="false">
+      <span class="dock-ic"><svg viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.4-.5-2-1-3-1.1-2.1-.2-4 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.2.4-2.3 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg></span>
+      <span class="dock-txt"><b class="num" id="n-titik_panas">0</b><small>Titik panas · 24 jam</small></span>
+    </button>
+    <button class="dock-btn" data-mode="banjir" style="--c:#22d3ee" aria-pressed="false">
+      <span class="dock-ic"><svg viewBox="0 0 24 24"><path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/></svg></span>
+      <span class="dock-txt"><b class="num" id="n-banjir">0</b><small>Banjir · waspada</small></span>
+    </button>
+    <button class="dock-btn" data-mode="laporan" style="--c:#3ea6ff" aria-pressed="false">
+      <span class="dock-ic"><svg viewBox="0 0 24 24"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg></span>
+      <span class="dock-txt"><b class="num" id="n-laporan">0</b><small>Laporan · 7 hari</small></span>
+    </button>
+  </nav>
+
+  <!-- Panel lapisan khusus -->
+  <aside id="panel" class="glass panel" aria-label="Lapisan" hidden>
+    <button id="grip" class="grip" aria-label="Buka/tutup panel" aria-expanded="false"><span></span></button>
+    <header class="panel-head">
+      <div class="head-row">
+        <button id="back" class="back" aria-label="Kembali ke semua lapisan">
+          <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg><span>Semua lapisan</span></button>
+        <button id="hide-list" class="icon-btn hide-list" aria-label="Sembunyikan daftar" title="Sembunyikan daftar">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M16 15l-3-3 3-3"/></svg></button>
+      </div>
+      <div class="panel-title"><span id="p-ic" class="p-ic"></span><h1 id="p-title">–</h1><span id="p-count" class="count"></span></div>
+      <p id="p-sub" class="panel-sub"></p>
+    </header>
+    <div id="legend" class="legend"></div>
+    <div id="chips" class="chips" hidden></div>
+    <div id="list" class="list"></div>
+  </aside>
+
+  <!-- Muncul saat daftar disembunyikan -->
+  <button id="show-list" class="glass show-list" aria-label="Tampilkan daftar" hidden>
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M14 9l3 3-3 3"/></svg>
+    <span id="show-list-txt">Daftar</span>
+  </button>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="app.js?v=51"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# Data live diambil ulang oleh GitHub Actions setiap 15 menit, tidak perlu masuk riwayat git
+site/data/live/
+__pycache__/
+*.pyc
+.claude/
