@@ -79,6 +79,21 @@
     return `${Math.round(h / 24)} hari lalu`;
   }
   const num = (n) => new Intl.NumberFormat("id-ID").format(n);
+  // Rapikan teks lokasi BMKG: "130 km BaratDaya MALUKUTENGGARA" -> "130 km barat daya Maluku Tenggara"
+  function rapiLokasi(s) {
+    if (!s) return s;
+    let t = String(s).replace(/^Pusat gempa berada di (laut|darat)\s+/i, "");
+    // nama wilayah huruf kapital semua: pisah kata yang menempel, lalu Huruf Awal Kapital
+    t = t.replace(/\b[A-Z]{4,}(?:-[A-Z]{4,})*\b/g, (w) => w.split("-").map((x) =>
+      x.replace(/^(PULAU|KEPULAUAN|KOTA)(?=[A-Z]{3,})/, "$1 ")
+        .replace(/([A-Z]{3,}?)(UTARA|SELATAN|TIMUR|BARAT|TENGGARA|TENGAH)$/, "$1 $2")
+        .toLowerCase().replace(/(^|\s)([a-z])/g, (_, a, c) => a + c.toUpperCase())).join(", "));
+    // arah mata angin huruf kecil: "BaratDaya" -> "barat daya"
+    t = t.replace(/\b([Bb]arat|[Tt]imur) ?([Ll]aut|[Dd]aya)\b/g, (_, a, b) => `${a.toLowerCase()} ${b.toLowerCase()}`)
+      .replace(/(\d+ km )(Utara|Selatan|Timur|Barat|Tenggara)\b/g, (_, k, w) => k + w.toLowerCase())
+      .replace(/([a-z])-([A-Z])/g, "$1, $2");
+    return t;
+  }
   const jamWIB = (iso) => new Intl.DateTimeFormat("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })
     .format(new Date(iso)) + " WIB";
   function sisa(iso) {
@@ -274,6 +289,7 @@
         getJSON("live/berita_banjir.json").catch(() => ({})),
         getJSON("live/berita_api.json").catch(() => ({})),
       ]);
+      for (const f of gempa.features) f.properties.lokasi = rapiLokasi(f.properties.lokasi);
       state.beritaGempa = bGempa;
       state.beritaBanjir = bBanjir;
       state.beritaApi = bApi;
