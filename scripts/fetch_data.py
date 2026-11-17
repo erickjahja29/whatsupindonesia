@@ -462,9 +462,9 @@ def fetch_event_news():
         per_prov.setdefault(p.get("provinsi") or "?", []).extend(_short_kab(k) for k in p.get("kabupaten_list", []))
     for prov, kabs in per_prov.items():
         key = f"bmkg|{prov}|{hari}"
-        if _cek_cache(cache, key, timedelta(0)) and n < 12:
+        if _cek_cache(cache, key, timedelta(0)) and n < 24:
             n += 1
-            tempat = list(dict.fromkeys(kabs))[:7] + [prov]
+            tempat = list(dict.fromkeys(kabs)) + [prov]
             r = coba(berita_banjir, get, tempat, NOW - timedelta(hours=36), NOW)
             if r is not None:
                 out[key] = {"diperiksa": iso(NOW), "berita": r}
@@ -475,7 +475,7 @@ def fetch_event_news():
         p = f["properties"]
         key = f"bnpb|{p['id']}"
         t = datetime.fromisoformat(p["tanggal"] + "T00:00:00+00:00")
-        if _cek_cache(cache, key, NOW - t, maks_umur=timedelta(days=5)) and n < 16:
+        if _cek_cache(cache, key, NOW - t, maks_umur=timedelta(days=5)) and n < 30:
             n += 1
             tempat = [_short_kab(p.get("kabupaten") or ""), re.sub(r"^(Kota Adm\.|Kota|Kab\.)\s*", "", p.get("kabupaten_bnpb") or "")]
             r = coba(berita_banjir, get, tempat, t - timedelta(days=1), t + timedelta(days=4))
@@ -547,6 +547,20 @@ def main():
         meta["lapisan"]["berita_laporan"] = {"ok": False, "galat": str(e)[:200]}
         if not (LIVE / "berita_laporan.json").exists():
             (LIVE / "berita_laporan.json").write_text("{}", encoding="utf-8")
+
+    print("- arsip RSS media ...")
+    try:
+        import berita as _b
+        lama = load_previous("berita_arsip.json")
+        arsip, n_ok = _b.perbarui_arsip(get, lama if isinstance(lama, list) else [], NOW)
+        _b.ARSIP = arsip
+        _b.GOOGLE_OFF = bool(os.environ.get("NO_GOOGLE"))  # uji: hanya arsip RSS
+        (LIVE / "berita_arsip.json").write_text(json.dumps(arsip, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        meta["lapisan"]["arsip_rss"] = {"ok": n_ok > 0, "diambil": iso(NOW), "media_ok": n_ok, "jumlah": len(arsip)}
+        print(f"  {len(arsip)} berita dari {n_ok} feed")
+    except Exception as e:
+        traceback.print_exc()
+        meta["lapisan"]["arsip_rss"] = {"ok": False, "galat": str(e)[:200]}
 
     print("- berita kejadian (gempa, banjir, karhutla) ...")
     try:

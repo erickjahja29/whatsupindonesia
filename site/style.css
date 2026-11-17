@@ -326,7 +326,8 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
     border-radius: 22px; padding: 4px 14px 12px; gap: 10px; transition: max-height .3s var(--ease-out);
     animation-name: sheetIn; }
   @keyframes sheetIn { from { opacity: 0; transform: translateY(30px); } }
-  .panel.open { max-height: 72vh; }
+  /* dibesarkan: berhenti tepat di bawah ticker (tidak tertutup) */
+  .panel.open { max-height: calc(100dvh - var(--tk-bottom, 120px) - var(--dock-h, 96px) - 10px); }
   .grip { display: flex; justify-content: center; align-items: center; height: 20px; margin: 0 -14px;
     border: 0; background: none; cursor: pointer; flex: none; }
   .grip span { width: 40px; height: 5px; border-radius: 3px; background: var(--stroke-2); }
@@ -344,4 +345,15 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+/* Layar sentuh: efek hover "nyangkut" setelah jari diangkat (mis. abu-abu di dock) -> matikan */
+@media (hover: none) {
+  .dock-btn:hover { background: transparent; transform: none; }
+  .dock-btn:hover .dock-ic { animation: none; }
+  .item:hover { background: none; transform: none; }
+  .show-list:hover, .back:hover { transform: none; }
+  .pop .news:hover, .chip:hover, .pop .ptab:hover, .icon-btn:hover { background: inherit; }
+  .chip:hover { background: var(--card); }
+  .chip[aria-pressed="true"]:hover { background: color-mix(in srgb, var(--c, #fff) 18%, transparent); }
 }

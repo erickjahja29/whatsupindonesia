@@ -159,6 +159,74 @@ class Dibatasi(Exception):
     """Google News sedang membatasi (HTTP 429): hentikan pencarian di run ini, coba lagi nanti."""
 
 
+# ----------------------------------------------------------------------
+# Arsip RSS media resmi: cadangan bila Google News kosong/membatasi (mis. dari server GitHub).
+# Dikumpulkan tiap run, disimpan 5 hari, dicocokkan dengan aturan yang sama (judul saja).
+# ----------------------------------------------------------------------
+RSS_MEDIA = [
+    "https://www.antaranews.com/rss/terkini.xml",
+    "https://www.antaranews.com/rss/nusantara.xml",
+    "https://www.antaranews.com/rss/metro.xml",
+    "https://www.cnnindonesia.com/nasional/rss",
+    "https://news.detik.com/rss",
+    "https://rss.tempo.co/nasional",
+    "https://www.cnbcindonesia.com/news/rss",
+    "https://www.republika.co.id/rss",
+    "https://sindikasi.okezone.com/index.php/rss/1/RSS2.0",
+    "https://mediaindonesia.com/feed",
+]
+ARSIP = []          # diisi fetch_data sebelum pencarian
+GOOGLE_OFF = False  # True setelah Google News membatasi (429) di run ini
+
+
+def _bersih(s):
+    """Buang pembungkus CDATA & spasi berlebih, lalu decode entitas HTML."""
+    s = re.sub(r"<!\[CDATA\[|\]\]>", "", s or "")
+    return re.sub(r"\s+", " ", unescape(s)).strip()
+
+
+def _nama_media(judul_kanal, url):
+    """Nama media yang rapi untuk ditampilkan (judul kanal RSS sering panjang/aneh)."""
+    host = urllib.parse.urlparse(url).netloc.lower()
+    peta = {"antaranews": "ANTARA News", "cnnindonesia": "CNN Indonesia", "detik": "detikNews", "tempo": "Tempo.co",
+            "cnbcindonesia": "CNBC Indonesia", "republika": "Republika", "okezone": "Okezone",
+            "mediaindonesia": "Media Indonesia"}
+    for k, v in peta.items():
+        if k in host:
+            return v
+    return judul_kanal or host
+
+
+def perbarui_arsip(get, lama, sekarang):
+    """Gabungkan item RSS baru dengan arsip lama; simpan 5 hari terakhir."""
+    items = {x["tautan"]: x for x in (lama or []) if isinstance(x, dict) and x.get("tautan")}
+    ok = 0
+    for url in RSS_MEDIA:
+        try:
+            raw = get(url, timeout=30).decode("utf-8", "replace")
+        except Exception as e:
+            print("    RSS gagal:", url, e)
+            continue
+        ok += 1
+        kanal = re.search(r"<channel>.*?<title>(.*?)</title>", raw, re.S)
+        media = _nama_media(_bersih(kanal.group(1)) if kanal else "", url)
+        for item in re.findall(r"<item>(.*?)</item>", raw, re.S):
+            def tag(name):
+                m = re.search(rf"<{name}(?:\s[^>]*)?>(.*?)</{name}>", item, re.S)
+                return _bersih(m.group(1)) if m else ""
+            link, judul = tag("link"), tag("title")
+            try:
+                terbit = parsedate_to_datetime(tag("pubDate")).astimezone(timezone.utc)
+            except Exception:
+                continue
+            if link and judul:
+                items[link] = {"judul": judul, "media": media, "situs": link, "tautan": link,
+                               "terbit": terbit.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    batas = (sekarang - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    hasil = sorted((x for x in items.values() if x["terbit"] >= batas), key=lambda x: x["terbit"], reverse=True)
+    return hasil[:4000], ok
+
+
 _MAG_RE = re.compile(r"(?:\bm\s?|magnitud[eo]\s?|bermagnitudo\s?|gempa\s)(\d{1,2}[.,]\d)\b")
 
 
@@ -166,21 +234,26 @@ def cari(get, queries, akar, tempat, t0, t1, maks=6, tambahan=(), tolak=(), magn
     """Cari berita resmi yang judulnya memuat salah satu `akar` (jenis kejadian) DAN salah satu
     `tempat` (atau salah satu `tambahan`, mis. angka magnitudo), terbit di antara t0..t1.
     `tolak`: kata yang membuat judul ditolak. `magnitudo`: judul yang menyebut magnitudo lain ditolak."""
+    global GOOGLE_OFF
     tempat = [t.lower() for t in tempat if t and len(t) >= 3]
     tambahan = [t.lower() for t in tambahan if t]
     after = (t0 - timedelta(days=1)).strftime("%Y-%m-%d")
     before = (t1 + timedelta(days=1)).strftime("%Y-%m-%d")
     hasil, seen = [], set()
-    for q in queries:
+    # Sumber: arsip RSS media (selalu) + Google News (selama tidak sedang dibatasi)
+    sumber = [[{**x, "terbit": datetime.fromisoformat(x["terbit"].replace("Z", "+00:00"))} for x in ARSIP]]
+    for q in ([] if GOOGLE_OFF else queries):
         try:
-            items = _search(get, f"{q} after:{after} before:{before}")
+            sumber.append(_search(get, f"{q} after:{after} before:{before}"))
         except Exception as e:
             if "429" in str(e):
-                raise Dibatasi(str(e))
+                print("  Google News membatasi permintaan; sisa run ini pakai arsip RSS saja")
+                GOOGLE_OFF = True
+                break
             print("    gagal cari:", q, e)
-            continue
         finally:
             time.sleep(1.6)  # sopan ke server (Google News membatasi permintaan beruntun)
+    for items in sumber:
         for it in items:
             j = it["judul"].lower()
             if not _resmi(it["situs"]) or not any(a in j for a in akar):
@@ -203,8 +276,6 @@ def cari(get, queries, akar, tempat, t0, t1, maks=6, tambahan=(), tolak=(), magn
                 continue
             seen.add(key)
             hasil.append(it)
-        if len(hasil) >= maks:
-            break
     hasil.sort(key=lambda x: x["terbit"], reverse=True)  # terbaru dulu
     return [{**h, "terbit": h["terbit"].strftime("%Y-%m-%dT%H:%M:%SZ")} for h in hasil[:maks]]
 
@@ -260,12 +331,29 @@ AKAR_KARHUTLA = ("karhutla", "kebakaran hutan", "kebakaran lahan", "lahan terbak
                  "titik panas", "hotspot", "kabut asap", "lahan gambut")
 
 
+SINGKATAN_PROV = {
+    "aceh": ["nad"], "sumatera utara": ["sumut"], "sumatera barat": ["sumbar"], "sumatera selatan": ["sumsel"],
+    "kepulauan riau": ["kepri"], "kep. riau": ["kepri"], "kepulauan bangka belitung": ["babel"],
+    "jawa barat": ["jabar"], "jawa tengah": ["jateng"], "jawa timur": ["jatim"], "dki jakarta": ["jakarta"],
+    "di yogyakarta": ["diy", "yogyakarta", "jogja"], "nusa tenggara barat": ["ntb"], "nusa tenggara timur": ["ntt"],
+    "kalimantan barat": ["kalbar"], "kalimantan tengah": ["kalteng"], "kalimantan selatan": ["kalsel"],
+    "kalimantan timur": ["kaltim"], "kalimantan utara": ["kaltara"], "sulawesi selatan": ["sulsel"],
+    "sulawesi tengah": ["sulteng"], "sulawesi tenggara": ["sultra"], "sulawesi utara": ["sulut"],
+    "sulawesi barat": ["sulbar"], "maluku utara": ["malut"],
+}
+
+
 def berita_banjir(get, tempat, t0, t1):
-    tempat = [t for t in tempat if t][:8]
+    """`tempat`: nama kabupaten/kota + provinsi. Kueri Google memakai 8 nama pertama; pencocokan judul
+    memakai semua nama + singkatan provinsi (Kalbar, Sumut, ...)."""
+    tempat = [t for t in tempat if t]
     if not tempat:
         return []
-    ors = " OR ".join(f'"{t}"' for t in tempat)
-    return cari(get, [f"(banjir OR genangan OR terendam) ({ors})"], AKAR_BANJIR, tempat, t0, t1, tolak=TOLAK_BANJIR)
+    cocok = list(tempat)
+    for t in tempat:
+        cocok += SINGKATAN_PROV.get(t.lower(), [])
+    ors = " OR ".join(f'"{t}"' for t in tempat[:8])
+    return cari(get, [f"(banjir OR genangan OR terendam) ({ors})"], AKAR_BANJIR, cocok, t0, t1, tolak=TOLAK_BANJIR)
 
 
 def berita_karhutla(get, kab, t0, t1):

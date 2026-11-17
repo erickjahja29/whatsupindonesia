@@ -377,6 +377,7 @@
     state.tick.items = buildTickerItems();
     const tk = $("#ticker");
     tk.hidden = !state.tick.items.length;
+    updateTopUI();
     if (state.newQuake || state.firstLoad) state.tick.i = 0; // gempa baru langsung ditampilkan
     showTick(state.tick.i % Math.max(state.tick.items.length, 1), true);
   }
@@ -698,8 +699,8 @@
       dock.classList.remove("swiping");
       if (Math.abs(dx) > 45) {
         const list = urutan(), i = list.indexOf(state.mode);
-        // geser ke kiri = lapisan berikutnya, ke kanan = sebelumnya (dari beranda: mulai dari ujung)
-        const j = dx < 0 ? (i < 0 ? 0 : Math.min(i + 1, list.length - 1)) : (i < 0 ? list.length - 1 : Math.max(i - 1, 0));
+        // jari ke kanan = sorotan ikut ke kanan (lapisan berikutnya), ke kiri = sebelumnya
+        const j = dx > 0 ? (i < 0 ? 0 : Math.min(i + 1, list.length - 1)) : (i < 0 ? list.length - 1 : Math.max(i - 1, 0));
         if (list[j] !== state.mode) setMode(list[j]);
         swiped = true;
       }
@@ -1212,6 +1213,10 @@
   function updateTopUI() {
     const b = $("#brand").getBoundingClientRect().bottom;
     document.documentElement.style.setProperty("--top-ui", `${Math.round(b + 12)}px`);
+    // batas atas lembar daftar di HP saat dibesarkan = bawah ticker (atau brand bila ticker tersembunyi)
+    const tk = $("#ticker");
+    const atas = tk && !tk.hidden ? tk.getBoundingClientRect().bottom : b;
+    document.documentElement.style.setProperty("--tk-bottom", `${Math.round(atas + 8)}px`);
   }
   window.addEventListener("resize", updateTopUI);
   new ResizeObserver(updateTopUI).observe($("#brand"));
