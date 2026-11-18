@@ -59,7 +59,8 @@
   // Tingkat aktivitas gunung api (PVMBG)
   const LEVEL_GUNUNG = {
     4: { nama: "Awas", rom: "IV", warna: "#ef4444" }, 3: { nama: "Siaga", rom: "III", warna: "#fb923c" },
-    2: { nama: "Waspada", rom: "II", warna: "#facc15" }, 1: { nama: "Normal", rom: "I", warna: "#94a3b8" },
+    2: { nama: "Waspada", rom: "II", warna: "#facc15" }, 1: { nama: "Normal", rom: "I", warna: "#22c55e" }, // hijau = warna resmi PVMBG Level I
+    0: { nama: "Pendakian", rom: "–", warna: "#22c55e" }, // gunung pendakian (tidak dipantau PVMBG): warna sama dgn Normal, label beda di popup
   };
   const segitiga = (c) => `<svg viewBox="0 0 24 24" style="fill:${c};stroke:none"><path d="M12 3 22.5 20.5h-21z"/></svg>`;
   const WARNA_WASPADA = "#fbbf24", WARNA_BNPB = "#22d3ee";
@@ -312,13 +313,13 @@
       map.addImage("segitiga", cx.getImageData(0, 0, n, n), { sdf: true, pixelRatio: 2 });
     }
     const warnaLevel = ["match", ["get", "level"], 4, LEVEL_GUNUNG[4].warna, 3, LEVEL_GUNUNG[3].warna,
-      2, LEVEL_GUNUNG[2].warna, LEVEL_GUNUNG[1].warna];
+      2, LEVEL_GUNUNG[2].warna, 1, LEVEL_GUNUNG[1].warna, LEVEL_GUNUNG[0].warna];
     map.addLayer({
       id: "gunung_api", type: "symbol", source: "gunung_api",
       layout: { "icon-image": "segitiga", "icon-allow-overlap": true, "symbol-sort-key": ["get", "level"],
-        "icon-size": ["interpolate", ["linear"], ["zoom"], 4, ["match", ["get", "level"], 1, 0.55, 2, 0.75, 1], 9,
-          ["match", ["get", "level"], 1, 0.9, 2, 1.1, 1.4]] },
-      paint: { "icon-color": warnaLevel, "icon-opacity": ["match", ["get", "level"], 1, 0.55, 1],
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 4, ["match", ["get", "level"], [0, 1], 0.55, 2, 0.75, 1], 9,
+          ["match", ["get", "level"], [0, 1], 0.9, 2, 1.1, 1.4]] },
+      paint: { "icon-color": warnaLevel, "icon-opacity": ["match", ["get", "level"], [0, 1], 0.85, 1],
         "icon-halo-color": W.halo, "icon-halo-width": 1.5 },
     });
     map.addLayer({
@@ -482,6 +483,9 @@
       state.anginData = angin;
       state.udaraData = udara;
       state.data.ispu = ispu;
+      // + gunung pendakian populer yang tidak dipantau PVMBG (file statis, level 0)
+      const daki = await getJSON("gunung_pendakian.geojson").catch(() => kosong);
+      gunung_api.features = gunung_api.features.filter((f) => f.properties.level !== 0).concat(daki.features);
       state.data.gunung_api = gunung_api;
       state.data.banjir_area = banjir_area;      // peringatan BMKG cepat kedaluwarsa (1–3 jam): buang yang sudah lewat
       peringatan.features = peringatan.features.filter((f) => new Date(f.properties.berakhir) > Date.now());
@@ -847,7 +851,18 @@
         }).join("");
       }
       const normal = semua.filter((f) => f.properties.level === 1).length;
-      html += normal ? `<div class="sec-note" style="margin-top:10px">${num(normal)} gunung lain berstatus Normal (segitiga abu-abu di peta).</div>` : "";
+      html += normal ? `<div class="sec-note" style="margin-top:10px">${num(normal)} gunung lain berstatus Normal (segitiga hijau di peta).</div>` : "";
+      const daki = semua.filter((f) => f.properties.level === 0).sort((a, b) => a.properties.nama.localeCompare(b.properties.nama));
+      if (daki.length) {
+        const L = LEVEL_GUNUNG[0];
+        html += `<div class="sec-title" style="--c:${L.warna};margin-top:14px"><i></i>Gunung pendakian · tidak dipantau PVMBG<span>${num(daki.length)}</span></div>`;
+        html += daki.map((f) => {
+          const p = f.properties; rows.push(f);
+          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${L.warna}22">${segitiga(L.warna)}</span>
+            <span class="item-main"><div class="item-title">${esc(p.nama)}</div>
+            <div class="item-sub">${esc(p.lokasi || where(p))}${p.elevasi ? ` · ${num(p.elevasi)} mdpl` : ""}</div></span></button>`;
+        }).join("");
+      }
     } else {
       rows = state.data.laporan.features.filter((f) => state.jenis === "semua" || f.properties.jenis === state.jenis);
       html = rows.map((f, i) => {
@@ -1880,10 +1895,12 @@
         ${p.lainnya ? `<dt>Lainnya</dt><dd>${esc(p.lainnya)}</dd>` : ""}
         ${p.kegempaan ? `<dt>Kegempaan</dt><dd>${esc(p.kegempaan)}</dd>` : ""}</dl>` : "";
     const rek = (p.rekomendasi || []).length ? `<ol class="rek">${p.rekomendasi.map((r) => `<li>${esc(r)}</li>`).join("")}</ol>` : "";
-    popupAt(lngLat, `<div class="pop"><h3><span class="hi" style="--c:${L.warna};color:#1a1200">${icon("gunung")}</span>Gunung ${esc(p.nama)}</h3>
-      <div class="sub"><span class="lv" style="--c:${L.warna}">Level ${L.rom} · ${L.nama}</span> ${esc(p.lokasi || where(p))}${p.elevasi ? ` · ${num(p.elevasi)} mdpl` : ""}</div>
+    const daki = p.level === 0;
+    popupAt(lngLat, `<div class="pop"><h3><span class="hi" style="--c:${L.warna};color:#1a1200">${icon("gunung")}</span>${judulGunung(p)}</h3>
+      <div class="sub"><span class="lv" style="--c:${L.warna}">${daki ? "Gunung pendakian" : `Level ${L.rom} · ${L.nama}`}</span> ${esc(p.lokasi || where(p))}${p.elevasi ? ` · ${num(p.elevasi)} mdpl` : ""}</div>
       ${p.erupsi || p.vona ? `<div class="flags">${p.erupsi ? `<span>Erupsi tercatat di MAGMA</span>` : ""}${p.vona ? `<span>Peringatan abu penerbangan (VONA)</span>` : ""}</div>` : ""}
-      ${p.level >= 2 ? "" : `<div class="nm">Status Normal: tidak ada peningkatan aktivitas yang dilaporkan.</div>`}
+      ${daki ? `<div class="nm">Tidak termasuk gunung api yang dipantau PVMBG, jadi tidak ada status level aktivitas.</div>`
+        : p.level >= 2 ? "" : `<div class="nm">Status Normal: tidak ada peningkatan aktivitas yang dilaporkan.</div>`}
       ${tabsHTML([
         { id: "k", ic: "gunung", label: "Kondisi", html: kondisiHTML(f) },
         lap ? { id: "l", label: "Laporan", html: `${p.periode ? `<div class="nm" style="margin-bottom:6px">${esc(p.periode)}</div>` : ""}${lap}` } : null,
@@ -1891,8 +1908,9 @@
         p.level >= 2 ? { id: "b", ic: "berita", label: "Berita", n: bl.length, html: newsHTML(bl, `Belum ada berita tentang Gunung ${p.nama} (3 hari terakhir).`) } : null,
         { id: "m", ic: "lapor", label: "Medsos", html: medsosHTML(p) },
       ], buka)}
-      <div class="src">Sumber: MAGMA Indonesia (PVMBG, Badan Geologi)${url ? ` · <a href="${esc(url)}" target="_blank" rel="noopener">laporan lengkap</a>` : ""}</div></div>`);
+      <div class="src">${daki ? "Lokasi & ketinggian: OpenStreetMap" : `Sumber: MAGMA Indonesia (PVMBG, Badan Geologi)${url ? ` · <a href="${esc(url)}" target="_blank" rel="noopener">laporan lengkap</a>` : ""}`}</div></div>`);
   }
+  const judulGunung = (p) => (/^Puncak\b/.test(p.nama) ? esc(p.nama) : `Gunung ${esc(p.nama)}`);
   // ---------- kondisi gunung untuk pendaki / trail runner ----------
   const RADIUS_SEKITAR = 25; // km
   function kmAntara([lo1, la1], [lo2, la2]) {
@@ -1943,7 +1961,7 @@
 
   // Medsos: tombol ke hashtag Instagram gunung (foto & video dari pengunjung). Dibuka di aplikasi/akun IG pengguna sendiri.
   function medsosHTML(p) {
-    const tag = `gunung${p.nama}`.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const dasar = p.nama.split(" (")[0], tag = (/^Puncak\b/.test(dasar) ? dasar : `gunung${dasar}`).toLowerCase().replace(/[^a-z0-9]/g, "");
     return `<div class="sec-h" style="margin-top:0">Foto &amp; video terbaru dari pendaki</div>
       <a class="ms-btn ms-ig" href="https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/" target="_blank" rel="noopener noreferrer">
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".6"/></svg>
@@ -2076,12 +2094,23 @@
     state.indeks = [...prov.values(), ...kab];
     return state.indeks;
   }
+  // Gunung (MAGMA + pendakian) ikut dicari; awalan "gunung/gn/mount" di nama & kata kunci diabaikan
+  const normGunung = (s) => normCari(s).replace(/^(gunung|gn|g|mount|mt)\s+/, "").replace(/\s*\(.*$/, "");
+  function indeksGunung() {
+    const fs = state.data.gunung_api?.features || [];
+    if (state.indeksGunung?.src === fs) return state.indeksGunung.list;
+    const list = fs.map((f) => ({ tipe: "gunung", f, nama: f.properties.nama,
+      n: normCari(f.properties.nama.replace(/[()]/g, " ")) }));
+    state.indeksGunung = { src: fs, list };
+    return list;
+  }
   function cariWilayah(q) {
-    const raw = q.toLowerCase(), n = normCari(q);
+    const raw = q.toLowerCase(), mauGunung = /\b(gunung|gn|mount|mt)\b/.test(raw);
+    const n = mauGunung ? normGunung(q) : normCari(q);
     if (!n) return [];
-    const mau = /\bkota\b/.test(raw) ? "kota" : /\bkab/.test(raw) ? "kab" : /\bprov/.test(raw) ? "prov" : null;
+    const mau = mauGunung ? "gunung" : /\bkota\b/.test(raw) ? "kota" : /\bkab/.test(raw) ? "kab" : /\bprov/.test(raw) ? "prov" : null;
     const hasil = [];
-    for (const e of state.indeks) {
+    for (const e of [...state.indeks, ...indeksGunung()]) {
       let s = e.n === n ? 100 : e.n.startsWith(n) ? 80 : e.n.split(" ").some((w) => w.startsWith(n)) ? 60 : e.n.includes(n) ? 40 : 0;
       if (!s) continue;
       if (mau && e.tipe === mau) s += 15;
@@ -2092,6 +2121,10 @@
   }
   function pilihWilayah(e) {
     tutupCari();
+    if (e.tipe === "gunung") {   // langsung terbang ke gunung & buka tab Kondisi
+      if (state.mode && state.mode !== "gunung_api") setMode(null);
+      return focusVolcano(e.f, "k");
+    }
     if (state.mode) setMode(null);
     const ids = new Set(e.tipe === "prov" ? e.ids : [e.id]);
     const bb = [[e.b[0], e.b[1]], [e.b[2], e.b[3]]];
@@ -2106,9 +2139,16 @@
     if (!state.indeks) { box.innerHTML = `<div class="cari-kosong">Memuat daftar wilayah…</div>`; return; }
     const hasil = cariWilayah(q);
     state.cariHasil = hasil; state.cariAktif = 0;
-    if (!q.trim()) { box.innerHTML = `<div class="cari-kosong">Contoh: Bandung, Kab. Bogor, Jawa Timur</div>`; return; }
-    if (!hasil.length) { box.innerHTML = `<div class="cari-kosong">Wilayah "${esc(q)}" tidak ditemukan.</div>`; return; }
+    if (!q.trim()) { box.innerHTML = `<div class="cari-kosong">Contoh: Bandung, Jawa Timur, Bromo, Lawu</div>`; return; }
+    if (!hasil.length) { box.innerHTML = `<div class="cari-kosong">"${esc(q)}" tidak ditemukan.</div>`; return; }
     box.innerHTML = hasil.map((e, i) => {
+      if (e.tipe === "gunung") {
+        const p = e.f.properties, L = LEVEL_GUNUNG[p.level] || LEVEL_GUNUNG[1];
+        const jenis = `${p.level === 0 ? "Gunung pendakian" : "Gunung api"} · ${p.lokasi || where(p)}`;
+        return `<button class="cari-item" role="option" data-i="${i}" aria-selected="${i === 0}">
+          <span class="ci-t"><b>${judulGunung(p)}</b><span>${esc(jenis)}</span></span>
+          <span class="ci-n ci-lv" style="--c:${L.warna}">${p.level === 0 ? `${num(p.elevasi || 0)} mdpl` : `Level ${L.rom}`}</span></button>`;
+      }
       const n = state.data.gempa ? jumlahKejadian(kejadianDi(new Set(e.tipe === "prov" ? e.ids : [e.id]))) : 0;
       const jenis = e.tipe === "prov" ? "Provinsi" : `${e.tipe === "kota" ? "Kota" : "Kabupaten"} · ${e.provinsi}`;
       return `<button class="cari-item" role="option" data-i="${i}" aria-selected="${i === 0}">

@@ -410,6 +410,7 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
 .ci-t span { font-size: 12px; color: var(--muted); }
 .ci-n { flex: none; font-size: 11px; font-weight: 600; color: var(--muted); padding: 2px 8px; border-radius: 99px; background: var(--card); }
 .ci-n.ada { color: #1a1200; background: #fbbf24; }
+.ci-n.ci-lv { color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
 .cari-kosong { padding: 10px 12px; font-size: 12.5px; color: var(--muted); }
 
 /* ringkasan wilayah di popup */
