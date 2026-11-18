@@ -558,6 +558,56 @@ def fetch_wind(regions):
     return {"diambil": iso(NOW), "sumber": "Open-Meteo", "jam": jam, "titik": titik}, {"dipakai_ulang": False, "titik": len(titik)}
 
 
+# ------------------------------------------------------------ polusi udara
+OPEN_METEO_UDARA = ("https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}"
+                    "&hourly=pm2_5&forecast_hours=12&timezone=GMT")
+UDARA_ULANG = timedelta(hours=3)  # model CAMS diperbarui beberapa kali sehari; hemat kuota gratis Open-Meteo
+
+
+def fetch_air(regions):
+    """PM2.5 (prakiraan model CAMS, per jam, 12 jam ke depan) di grid yang sama dengan angin, dari Open-Meteo.
+    Diambil ulang paling cepat tiap 3 jam."""
+    lama = load_previous("udara.json")
+    if lama.get("diambil"):
+        umur = NOW - datetime.fromisoformat(lama["diambil"].replace("Z", "+00:00"))
+        jam_terakhir = datetime.fromisoformat(lama["jam"][-1] + "+00:00") if lama.get("jam") else NOW
+        if umur < UDARA_ULANG and jam_terakhir > NOW + timedelta(hours=6):
+            return lama, {"dipakai_ulang": True, "titik": len(lama.get("titik", []))}
+    grid = []
+    lat = BBOX[1] + 0.5
+    while lat <= BBOX[3]:
+        lon = BBOX[0] + 0.5
+        while lon <= BBOX[2]:
+            grid.append((round(lon, 2), round(lat, 2)))
+            lon += ANGIN_LANGKAH
+        lat += ANGIN_LANGKAH
+    titik, jam = [], None
+    for i in range(0, len(grid), 100):
+        chunk = grid[i:i + 100]
+        url = OPEN_METEO_UDARA.format(lat=",".join(str(c[1]) for c in chunk), lon=",".join(str(c[0]) for c in chunk))
+        for coba in range(4):
+            try:
+                data = json.loads(get(url, timeout=60))
+                break
+            except Exception as e:
+                if coba == 3:
+                    raise
+                print(f"    udara: percobaan {coba + 1} gagal ({e}), ulangi")
+                time.sleep(5 * (coba + 1))
+        if isinstance(data, dict):
+            data = [data]
+        for (lon, lat), d in zip(chunk, data):
+            h = d.get("hourly") or {}
+            jam = jam or h.get("time")
+            pm = h.get("pm2_5")
+            if not pm:
+                continue
+            titik.append([lon, lat, [round(x, 1) if x is not None else None for x in pm]])
+    if not titik:
+        raise ValueError("Open-Meteo tidak mengembalikan data polusi udara")
+    return {"diambil": iso(NOW), "sumber": "Open-Meteo (CAMS)", "jam": jam, "titik": titik}, {"dipakai_ulang": False, "titik": len(titik)}
+
+
 # ------------------------------------------------- berita terkait laporan
 def load_previous(name):
     """Data run sebelumnya: file lokal, atau (di GitHub Actions) salinan dari situs yang sudah terbit."""
@@ -758,6 +808,17 @@ def main():
         traceback.print_exc()
         prev = old_meta.get("lapisan", {}).get("angin", {})
         meta["lapisan"]["angin"] = {**prev, "ok": False, "galat": str(e)[:200]}
+
+    print("- polusi udara ...")
+    try:
+        udara, info = fetch_air(None)
+        (LIVE / "udara.json").write_text(json.dumps(udara, separators=(",", ":")), encoding="utf-8")
+        meta["lapisan"]["udara"] = {"ok": True, "jumlah": len(udara["titik"]), "diambil": udara["diambil"], **info}
+        print(f"  {info}")
+    except Exception as e:
+        traceback.print_exc()
+        prev = old_meta.get("lapisan", {}).get("udara", {})
+        meta["lapisan"]["udara"] = {**prev, "ok": False, "galat": str(e)[:200]}
 
     print("- berita terkait laporan ...")
     try:

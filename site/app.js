@@ -161,6 +161,7 @@
   const baca = (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } };
   state.tema = document.documentElement.dataset.theme === "light" ? "terang" : "gelap";
   state.angin = baca("wui-angin") === "1";
+  state.udara = baca("wui-udara") === "1";
   const warnaTema = () => (state.tema === "terang"
     ? { halo: "#ffffff", teks: "#0f172a", gelombang: "#334155", garis: "#7c8a9c", hover: "#0f172a" }
     : { halo: "#07090d", teks: "#ffffff", gelombang: "#ffffff", garis: "#5b6b7c", hover: "#ffffff" });
@@ -182,8 +183,11 @@
       d.innerHTML = `<button type="button" id="segar-btn" class="ctrl-segar" title="Muat ulang peta &amp; data"
         aria-label="Muat ulang peta dan data"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg></button>
         <button type="button" id="angin-btn" class="ctrl-angin" aria-pressed="false" title="Angin: nyala/mati"
-        aria-label="Lapisan angin">${icon("angin")}</button>`;
+        aria-label="Lapisan angin">${icon("angin")}</button>
+        <button type="button" id="udara-btn" class="ctrl-udara" aria-pressed="false" title="Polusi udara (PM2.5): nyala/mati"
+        aria-label="Lapisan polusi udara"><svg viewBox="0 0 24 24"><path d="M3 8h11a3 3 0 1 0-3-3"/><path d="M3 12h16a3 3 0 1 1-3 3"/><path d="M3 16h7"/><circle cx="17" cy="6" r=".6"/><circle cx="20" cy="9" r=".6"/></svg></button>`;
       d.querySelector("#angin-btn").addEventListener("click", () => setAngin(!state.angin));
+      d.querySelector("#udara-btn").addEventListener("click", () => setUdara(!state.udara));
       d.querySelector("#segar-btn").addEventListener("click", segarkan);
       return d;
     }
@@ -195,7 +199,7 @@
   // MapLibre tidak mengulang ubin peta yang gagal diunduh (sinyal lemah / server sibuk), sehingga peta dasar
   // bisa tetap hitam. Bila ubin peta dasar gagal, muat ulang gaya peta (lapisan data dipasang ulang otomatis).
   const SUMBER_KITA = new Set(["wilayah", "titik_panas", "gempa", "laporan", "guncangan", "guncangan-label", "gelombang",
-    "peringatan", "gunung_api", "banjir_area", "angin"]);
+    "peringatan", "gunung_api", "banjir_area", "angin", "udara", "udara-img"]);
   const pulih = { gagal: 0, coba: 0, t: null };
   map.on("error", (e) => {
     if (e.sourceId ? SUMBER_KITA.has(e.sourceId) : map.isStyleLoaded()) return;
@@ -373,6 +377,16 @@
       cx.lineTo(16.5, 16); cx.lineTo(9, 16); cx.closePath(); cx.fill();
       map.addImage("panah", cx.getImageData(0, 0, n, n), { sdf: true, pixelRatio: 2 });
     }
+    // Polusi udara: grid PM2.5 digambar ke kanvas kecil, lalu ditampilkan sebagai raster yang dihaluskan
+    map.addSource("udara-img", { type: "image", url: GAMBAR_KOSONG, coordinates: [[94, 7], [142, 7], [142, -12], [94, -12]] });
+    map.addLayer({ id: "udara-img", type: "raster", source: "udara-img",
+      layout: { visibility: state.udara ? "visible" : "none" },
+      paint: { "raster-opacity": state.tema === "terang" ? 0.75 : 0.7, "raster-resampling": "linear", "raster-fade-duration": 0 } },
+    "peringatan-fill");
+    map.addSource("udara", { type: "geojson", data: empty });
+    map.addLayer({ id: "udara-hit", type: "circle", source: "udara",
+      layout: { visibility: state.udara ? "visible" : "none" },
+      paint: { "circle-radius": 14, "circle-opacity": 0, "circle-stroke-opacity": 0 } });
     map.addSource("angin", { type: "geojson", data: empty });
     // Titik grid tak terlihat: target klik untuk info angin (animasinya digambar di kanvas terpisah)
     map.addLayer({ id: "angin-hit", type: "circle", source: "angin",
@@ -396,6 +410,7 @@
     if (state.data.gempa) applyToMap();
     applyMode(false);
     terapkanAngin();
+    terapkanUdara();
   });
 
   map.on("load", () => {
@@ -420,6 +435,7 @@
     if (state.data.gempa) applyToMap();
     applyMode(false);
     terapkanAngin();
+    terapkanUdara();
     // Intro: terbang dari jauh ke Indonesia
     setTimeout(() => map.fitBounds(INDONESIA, { padding: viewPadding(), duration: REDUCED ? 0 : 2600,
       curve: 1.6, essential: true }), REDUCED ? 0 : 250);
@@ -430,7 +446,7 @@
     try {
       const kosong = { type: "FeatureCollection", features: [] };
       const [meta, gempa, titik_panas, laporan, berita, peringatan, banjir_bnpb, bGempa, bBanjir, bApi,
-        gunung_api, banjir_area, bGunung, angin] = await Promise.all([
+        gunung_api, banjir_area, bGunung, angin, udara] = await Promise.all([
         getJSON("live/meta.json"), getJSON("live/gempa.geojson"),
         getJSON("live/titik_panas.geojson"), getJSON("live/laporan.geojson"),
         getJSON("live/berita_laporan.json").catch(() => ({})),
@@ -443,6 +459,7 @@
         getJSON("live/banjir_area.geojson").catch(() => kosong),
         getJSON("live/berita_gunung.json").catch(() => ({})),
         getJSON("live/angin.json").catch(() => null),
+        getJSON("live/udara.json").catch(() => null),
       ]);
       for (const f of gempa.features) f.properties.lokasi = rapiLokasi(f.properties.lokasi);
       state.beritaGempa = bGempa;
@@ -450,6 +467,7 @@
       state.beritaApi = bApi;
       state.beritaGunung = bGunung;
       state.anginData = angin;
+      state.udaraData = udara;
       state.data.gunung_api = gunung_api;
       state.data.banjir_area = banjir_area;
       // peringatan BMKG cepat kedaluwarsa (1–3 jam): buang yang sudah lewat
@@ -471,7 +489,7 @@
       renderTicker();
       if (state.mode) { renderPanel(); applyListVisibility(); }
       updateCtrl();
-      if (state.mapReady) { applyToMap(); terapkanAngin(); }
+      if (state.mapReady) { applyToMap(); terapkanAngin(); terapkanUdara(); }
       state.firstLoad = false;
     } catch (e) {
       console.error(e);
@@ -865,7 +883,7 @@
     }
     map.on("click", (e) => {
       const layers = ["gunung_api", "laporan", "banjir-lapor", "gempa", "titik_panas", "banjir-area-fill", "bnpb-fill",
-        "peringatan-fill", "angin", "angin-hit", "wilayah-fill"].filter((id) => map.getLayoutProperty(id, "visibility") !== "none");
+        "peringatan-fill", "udara-hit", "angin", "angin-hit", "wilayah-fill"].filter((id) => map.getLayoutProperty(id, "visibility") !== "none");
       const hits = map.queryRenderedFeatures(e.point, { layers });
       if (!hits.length) return;
       let f = hits[0], layer = f.layer.id;
@@ -875,6 +893,7 @@
         return showVolcano(full, { lng: full.geometry.coordinates[0], lat: full.geometry.coordinates[1] });
       }
       if (layer === "banjir-area-fill") { clearRings(); return showAreaPopup(f, e.lngLat); }
+      if (layer === "udara-hit") { clearRings(); return showAirPopup(f); }
       if (layer === "angin" || layer === "angin-hit") { clearRings(); return showWindPopup(f); }
       if (layer === "banjir-lapor") layer = "laporan";
       if (layer === "wilayah-fill") { clearRings(); return showRegionPopup(f.properties, e.lngLat); }
@@ -956,16 +975,12 @@
       grip.setAttribute("aria-expanded", String(open));
       updateCtrl();
     });
-    $("#tema-btn").addEventListener("click", () => setTema(state.tema === "terang" ? "gelap" : "terang"));
-    $("#tema-btn").setAttribute("aria-pressed", String(state.tema === "terang"));
-    const infoBtn = $("#info-btn");
-    infoBtn.addEventListener("click", () => {
-      const show = $("#info").hidden;
-      $("#info").hidden = !show;
-      infoBtn.setAttribute("aria-expanded", String(show));
-      updateTopUI();
+    wireSetelan();
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (!$("#setelan").hidden) return bukaSetelan(false);
+      if (state.mode) setMode(null);
     });
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.mode) setMode(null); });
     wireTicker();
     wireCari();
   }
@@ -1353,6 +1368,85 @@
     updateCtrl();
   }
 
+  // ---------- polusi udara (PM2.5, prakiraan model CAMS via Open-Meteo) ----------
+  const GAMBAR_KOSONG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  // Kategori ISPU untuk PM2.5 (µg/m³, Permen LHK P.14/2020) dengan warna resminya
+  const ISPU = [
+    { maks: 15.5, nama: "Baik", warna: [34, 197, 94], a: 0 },        // udara baik: tidak diwarnai (peta tetap bersih)
+    { maks: 55.4, nama: "Sedang", warna: [59, 130, 246], a: 0.42 },
+    { maks: 150.4, nama: "Tidak sehat", warna: [250, 204, 21], a: 0.62 },
+    { maks: 250.4, nama: "Sangat tidak sehat", warna: [239, 68, 68], a: 0.72 },
+    { maks: Infinity, nama: "Berbahaya", warna: [30, 30, 30], a: 0.8 },
+  ];
+  const kategoriPM = (v) => ISPU.find((k) => v <= k.maks) || ISPU[ISPU.length - 1];
+  const jamUdara = () => {
+    const jam = state.udaraData?.jam || [];
+    let i = 0;
+    jam.forEach((t, k) => { if (Date.parse(t + ":00Z") <= Date.now()) i = k; });
+    return i;
+  };
+  function gambarUdara() {
+    const d = state.udaraData, i = jamUdara();
+    const lons = [...new Set(d.titik.map((t) => t[0]))].sort((a, b) => a - b);
+    const lats = [...new Set(d.titik.map((t) => t[1]))].sort((a, b) => b - a); // utara di atas
+    const ix = new Map(lons.map((v, k) => [v, k])), iy = new Map(lats.map((v, k) => [v, k]));
+    const cv = document.createElement("canvas");
+    cv.width = lons.length; cv.height = lats.length;
+    const cx = cv.getContext("2d"), img = cx.createImageData(cv.width, cv.height);
+    for (const [lon, lat, pm] of d.titik) {
+      const v = pm[i];
+      if (v == null) continue;
+      const k = kategoriPM(v), o = (iy.get(lat) * cv.width + ix.get(lon)) * 4;
+      img.data[o] = k.warna[0]; img.data[o + 1] = k.warna[1]; img.data[o + 2] = k.warna[2];
+      img.data[o + 3] = Math.round(k.a * 255);
+    }
+    cx.putImageData(img, 0, 0);
+    const dx = (lons[1] - lons[0]) / 2, dy = (lats[0] - lats[1]) / 2;
+    const W = lons[0] - dx, E = lons[lons.length - 1] + dx, N = lats[0] + dy, S = lats[lats.length - 1] - dy;
+    return { url: cv.toDataURL(), coordinates: [[W, N], [E, N], [E, S], [W, S]] };
+  }
+  function terapkanUdara() {
+    const btn = $("#udara-btn");
+    if (btn) btn.setAttribute("aria-pressed", String(state.udara));
+    if (!state.mapReady || !map.getSource("udara-img")) return;
+    const ada = !!state.udaraData && state.udara;
+    if (ada) {
+      const i = jamUdara(), key = `${state.udaraData.diambil}|${i}|${state.tema}`;
+      const src = map.getSource("udara-img");
+      if (state.udaraKey !== key || state.udaraSrc !== src) {   // sumber baru setelah ganti tema / muat ulang
+        src.updateImage(gambarUdara());
+        state.udaraKey = key; state.udaraSrc = src;
+      }
+      map.getSource("udara").setData({ type: "FeatureCollection", features: state.udaraData.titik.map(([lon, lat], k) => ({
+        type: "Feature", geometry: { type: "Point", coordinates: [lon, lat] }, properties: { k } })) });
+    }
+    for (const l of ["udara-img", "udara-hit"]) map.setLayoutProperty(l, "visibility", ada ? "visible" : "none");
+  }
+  function setUdara(on) {
+    state.udara = on;
+    simpan("wui-udara", on ? "1" : "0");
+    state.udaraKey = null;
+    if (!on && state.popup && state.popupUdara) state.popup.remove();
+    terapkanUdara();
+  }
+  function showAirPopup(f) {
+    const d = state.udaraData, i = jamUdara(), row = d.titik[f.properties.k];
+    const v = row[2][i], K = kategoriPM(v);
+    const lanjut = [3, 6, 9].filter((h) => row[2][i + h] != null).map((h) => {
+      const w = row[2][i + h], kk = kategoriPM(w);
+      return `<div><b style="color:rgb(${kk.warna})">${num(Math.round(w))}</b><span>${esc(jamWIB(d.jam[i + h] + ":00Z").replace(" WIB", ""))}<br>${esc(kk.nama.toLowerCase())}</span></div>`;
+    }).join("");
+    const skala = ISPU.map((k) => `<span class="ispu${k === K ? " on" : ""}" style="--c:rgb(${k.warna})"><i></i>${esc(k.nama)}</span>`).join("");
+    const [lng, lat] = f.geometry.coordinates;
+    popupAt({ lng, lat }, `<div class="pop"><h3><span class="hi" style="--c:rgb(${K.warna})">${icon("asap")}</span>Udara: ${esc(K.nama)}</h3>
+      <div class="sub">PM2.5 sekitar <b>${num(Math.round(v))} µg/m³</b> · kategori ISPU</div>
+      <div class="ispu-skala">${skala}</div>
+      ${lanjut ? `<div class="sec-h" style="margin-top:8px">Prakiraan berikutnya (µg/m³)</div><div class="grid3">${lanjut}</div>` : ""}
+      <div class="src">Prakiraan model CAMS via Open-Meteo, rata-rata area ±165 km (bukan alat ukur). Nilai di kota bisa jauh lebih tinggi. Data resmi: ISPU KLHK.</div></div>`);
+    state.popupUdara = true;
+    state.popup.on("close", () => { state.popupUdara = false; });
+  }
+
   // ---------- animasi partikel angin ----------
   // Partikel hanyut mengikuti angin (u/v diinterpolasi bilinear dari grid), meninggalkan jejak yang memudar.
   // Satu warna netral (abu-abu) agar tidak ramai; kecepatan angin terlihat dari laju gerak partikel
@@ -1476,10 +1570,64 @@
     simpan("wui-tema", t);
     document.documentElement.dataset.theme = t === "terang" ? "light" : "dark";
     document.querySelector('meta[name="theme-color"]').setAttribute("content", t === "terang" ? "#eef1f5" : "#07090d");
-    $("#tema-btn").setAttribute("aria-pressed", String(t === "terang"));
-    $("#tema-btn").title = t === "terang" ? "Ganti ke mode gelap" : "Ganti ke mode terang";
+    tandaiTema();
     if (state.popup) state.popup.remove();
     map.setStyle(GAYA[t], { diff: false });
+  }
+
+  // ---------- pengaturan: tema, pasang di HP, sumber data ----------
+  function tandaiTema() {
+    document.querySelectorAll(".seg-btn[data-tema]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.tema === state.tema)));
+  }
+  function bukaSetelan(buka) {
+    $("#setelan").hidden = !buka;
+    $("#setelan-btn").setAttribute("aria-expanded", String(buka));
+    if (buka) { $("#setelan-btn").classList.remove("titik"); simpan("wui-lihat-setelan", "1"); perbaruiPasang(); }
+    updateTopUI();
+  }
+  const diPasang = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const iOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  function perbaruiPasang() {
+    const b = $("#pasang-btn"), t = $("#pasang-txt"), info = $("#pasang-info");
+    b.disabled = false;
+    if (diPasang()) {
+      b.disabled = true; t.textContent = "Sudah terpasang";
+      info.textContent = "Kamu sedang membuka versi aplikasi dari layar HP.";
+    } else if (state.pasangPrompt) {
+      t.textContent = "Pasang What'sUpIndonesia";
+      info.textContent = "Buka dari ikon di layar HP seperti aplikasi, tanpa toko aplikasi.";
+    }
+  }
+  function pasangAplikasi() {
+    const info = $("#pasang-info");
+    if (state.pasangPrompt) {
+      const ev = state.pasangPrompt;
+      state.pasangPrompt = null;
+      ev.prompt();
+      ev.userChoice.then((r) => { if (r.outcome !== "accepted") state.pasangPrompt = ev; perbaruiPasang(); });
+    } else if (iOS()) {
+      info.innerHTML = "Di <b>Safari</b>: ketuk tombol <b>Bagikan</b> (kotak dengan panah ke atas), lalu pilih <b>Tambahkan ke Layar Utama</b>.";
+    } else {
+      info.innerHTML = "Buka menu browser (<b>⋮</b>), lalu pilih <b>Instal aplikasi</b> atau <b>Tambahkan ke layar utama</b>.";
+    }
+    updateTopUI();
+  }
+  function wireSetelan() {
+    $("#setelan-btn").addEventListener("click", () => bukaSetelan($("#setelan").hidden));
+    document.querySelectorAll(".seg-btn[data-tema]").forEach((b) => b.addEventListener("click", () => {
+      if (b.dataset.tema !== state.tema) setTema(b.dataset.tema);
+    }));
+    tandaiTema();
+    $("#pasang-btn").addEventListener("click", pasangAplikasi);
+    // klik di luar kotak judul = tutup pengaturan
+    document.addEventListener("pointerdown", (e) => {
+      if (!$("#setelan").hidden && !e.target.closest("#brand")) bukaSetelan(false);
+    });
+    window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); state.pasangPrompt = e; perbaruiPasang(); });
+    window.addEventListener("appinstalled", () => { state.pasangPrompt = null; perbaruiPasang(); });
+    // tanda kecil di tombol pengaturan untuk pengunjung HP yang belum pernah membukanya
+    if (isMobile() && !diPasang() && !baca("wui-lihat-setelan")) $("#setelan-btn").classList.add("titik");
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { /* opsional */ });
   }
 
   // ---------- gunung api ----------

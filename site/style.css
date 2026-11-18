@@ -91,10 +91,29 @@ svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2
 .icon-btn:hover, .icon-btn[aria-expanded="true"] { background: var(--card-2); color: var(--text); }
 .updated { margin-top: 2px; font-size: 11.5px; color: var(--muted); }
 .updated b { color: var(--text); font-weight: 600; }
-.info { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--soft);
-  animation: fadeDown .3s var(--ease-out); }
+/* ---------- pengaturan (di dalam kotak judul) ---------- */
+.setelan { margin-top: 8px; display: flex; flex-direction: column; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line);
+  animation: fadeDown .3s var(--ease-out); max-height: calc(100dvh - 120px); overflow-y: auto; }
+.st-sec h2 { margin: 0 0 6px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; border-radius: 12px; background: var(--card); }
+.seg-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; border: 0; border-radius: 9px;
+  background: transparent; color: var(--muted); font-weight: 600; font-size: 13px; cursor: pointer; transition: background .2s, color .2s; }
+.seg-btn svg { font-size: 15px; }
+.seg-btn[aria-checked="true"] { background: var(--card-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--stroke-2); }
+.st-btn { width: 100%; display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: 10px;
+  border: 1px solid var(--stroke-2); background: var(--card); color: var(--text); font-weight: 600; font-size: 13px; cursor: pointer;
+  transition: background .2s, border-color .2s; }
+.st-btn svg { font-size: 16px; }
+.st-btn:hover:not(:disabled) { background: var(--card-2); }
+.st-btn:disabled { cursor: default; color: var(--muted); }
+.st-note { margin: 6px 0 0; font-size: 11.5px; color: var(--soft); line-height: 1.45; }
+.info { font-size: 11.5px; color: var(--soft); }
 .info p { margin: 0 0 6px; }
 .info .credit { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); }
+/* tanda kecil: ada sesuatu di pengaturan (mis. pasang di HP) */
+#setelan-btn { position: relative; }
+#setelan-btn.titik::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%;
+  background: #ff4d4f; box-shadow: 0 0 0 2px var(--bg); }
 @keyframes fadeDown { from { opacity: 0; transform: translateY(-6px); } }
 
 /* ---------- ticker (atas tengah) ---------- */
@@ -395,6 +414,15 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
 .maplibregl-ctrl-group .ctrl-angin:hover { opacity: 1; }
 .maplibregl-ctrl-group .ctrl-angin[aria-pressed="true"] { opacity: 1; color: #fff; background: #0d9488; }
 .angin-kanvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+.maplibregl-ctrl-group .ctrl-udara { display: grid; place-items: center; font-size: 17px; color: var(--text); opacity: .8;
+  transition: color .2s, background .2s, opacity .2s; }
+.maplibregl-ctrl-group .ctrl-udara:hover { opacity: 1; }
+.maplibregl-ctrl-group .ctrl-udara[aria-pressed="true"] { opacity: 1; color: #fff; background: #7c3aed; }
+.pop .ispu-skala { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+.pop .ispu { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 99px; font-size: 11px;
+  color: var(--muted); background: var(--card); }
+.pop .ispu i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.pop .ispu.on { color: var(--text); font-weight: 600; box-shadow: inset 0 0 0 1px var(--c); }
 .maplibregl-ctrl-group .ctrl-segar { display: grid; place-items: center; font-size: 16px; color: var(--text); opacity: .8; }
 .maplibregl-ctrl-group .ctrl-segar:hover { opacity: 1; }
 .ctrl-segar.putar svg { animation: putar .8s linear infinite; }
