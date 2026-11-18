@@ -38,7 +38,7 @@
   --text: #0f172a;
   --muted: #5b6676;
   --accent: #b45309;
-  --brand-bg: rgba(255, 255, 255, .55);
+  --brand-bg: rgba(255, 255, 255, .9);
   --pop-bg: rgba(255, 255, 255, .96);
   --soft: #475569;
   --merah-teks: #be123c;
@@ -339,6 +339,7 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
 .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(1) opacity(.8); }
 :root[data-theme="light"] .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: opacity(.75); }
 .updated .warn { color: var(--merah-teks); }
+:root[data-theme="light"] .brand { opacity: 1; }
 .pop .ptab[aria-expanded="true"] { color: var(--accent); }
 :root[data-theme="light"] .pop .ptab[aria-expanded="true"] { background: rgba(180, 83, 9, .1); border-color: rgba(180, 83, 9, .4); }
 :root[data-theme="light"] .tk-dots i.on { background: var(--text); }
