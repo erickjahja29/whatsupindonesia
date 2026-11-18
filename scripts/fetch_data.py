@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import time
 import traceback
 import urllib.request
 from html import unescape
@@ -533,7 +534,15 @@ def fetch_wind(regions):
     for i in range(0, len(grid), 100):
         chunk = grid[i:i + 100]
         url = OPEN_METEO.format(lat=",".join(str(c[1]) for c in chunk), lon=",".join(str(c[0]) for c in chunk))
-        data = json.loads(get(url, timeout=60))
+        for coba in range(4):  # koneksi ke Open-Meteo dari server GitHub kadang timeout: ulangi
+            try:
+                data = json.loads(get(url, timeout=60))
+                break
+            except Exception as e:
+                if coba == 3:
+                    raise
+                print(f"    angin: percobaan {coba + 1} gagal ({e}), ulangi")
+                time.sleep(5 * (coba + 1))
         if isinstance(data, dict):
             data = [data]
         for (lon, lat), d in zip(chunk, data):
