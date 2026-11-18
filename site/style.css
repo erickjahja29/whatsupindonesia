@@ -394,6 +394,10 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
 .maplibregl-ctrl-group .ctrl-angin:hover { opacity: 1; }
 .maplibregl-ctrl-group .ctrl-angin[aria-pressed="true"] { opacity: 1; color: #fff; background: #0d9488; }
 .angin-kanvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+.maplibregl-ctrl-group .ctrl-segar { display: grid; place-items: center; font-size: 16px; color: var(--text); opacity: .8; }
+.maplibregl-ctrl-group .ctrl-segar:hover { opacity: 1; }
+.ctrl-segar.putar svg { animation: putar .8s linear infinite; }
+@keyframes putar { to { transform: rotate(360deg); } }
 .maplibregl-ctrl-bottom-right { bottom: var(--ctrl-bottom, 0px); transition: bottom .3s var(--ease-out); }
 .maplibregl-ctrl-attrib { font-size: 10px; }
 

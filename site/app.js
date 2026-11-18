@@ -179,14 +179,53 @@
     onAdd() {
       const d = document.createElement("div");
       d.className = "maplibregl-ctrl maplibregl-ctrl-group";
-      d.innerHTML = `<button type="button" id="angin-btn" class="ctrl-angin" aria-pressed="false" title="Angin: nyala/mati"
+      d.innerHTML = `<button type="button" id="segar-btn" class="ctrl-segar" title="Muat ulang peta &amp; data"
+        aria-label="Muat ulang peta dan data"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg></button>
+        <button type="button" id="angin-btn" class="ctrl-angin" aria-pressed="false" title="Angin: nyala/mati"
         aria-label="Lapisan angin">${icon("angin")}</button>`;
-      d.querySelector("button").addEventListener("click", () => setAngin(!state.angin));
+      d.querySelector("#angin-btn").addEventListener("click", () => setAngin(!state.angin));
+      d.querySelector("#segar-btn").addEventListener("click", segarkan);
       return d;
     }
     onRemove() { /* tidak dipakai */ }
   }
   map.addControl(new KontrolAngin(), "bottom-right");
+
+  // ---------- pemulihan peta dasar ----------
+  // MapLibre tidak mengulang ubin peta yang gagal diunduh (sinyal lemah / server sibuk), sehingga peta dasar
+  // bisa tetap hitam. Bila ubin peta dasar gagal, muat ulang gaya peta (lapisan data dipasang ulang otomatis).
+  const SUMBER_KITA = new Set(["wilayah", "titik_panas", "gempa", "laporan", "guncangan", "guncangan-label", "gelombang",
+    "peringatan", "gunung_api", "banjir_area", "angin"]);
+  const pulih = { gagal: 0, coba: 0, t: null };
+  map.on("error", (e) => {
+    if (e.sourceId ? SUMBER_KITA.has(e.sourceId) : map.isStyleLoaded()) return;
+    pulih.gagal++;
+    clearTimeout(pulih.t);
+    pulih.t = setTimeout(() => {
+      if (!pulih.gagal || pulih.coba >= 3) return;   // paling banyak 3 kali berturut-turut
+      pulih.coba++; pulih.gagal = 0;
+      map.setStyle(GAYA[state.tema], { diff: false });
+    }, 3000 * (pulih.coba + 1));
+  });
+  map.on("idle", () => { if (!pulih.gagal) pulih.coba = 0; });
+
+  // Tombol muat ulang: peta dasar + semua data, tanpa memuat ulang halaman
+  function segarkan() {
+    const b = $("#segar-btn");
+    if (b.classList.contains("putar")) return;
+    b.classList.add("putar");
+    if (state.popup) state.popup.remove();
+    pulih.gagal = 0; pulih.coba = 0;
+    map.setStyle(GAYA[state.tema], { diff: false });
+    Promise.all([loadLive(), new Promise((r) => { map.once("idle", r); setTimeout(r, 8000); })])
+      .finally(() => b.classList.remove("putar"));
+  }
+  // Kembali ke tab setelah lama ditinggal: ambil data terbaru
+  let tSembunyi = 0;
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) tSembunyi = Date.now();
+    else if (tSembunyi && Date.now() - tSembunyi > 5 * 60 * 1000) loadLive();
+  });
 
   // Lapisan data di atas peta dasar. Dipasang ulang setiap gaya peta berganti (tema terang/gelap).
   function pasangLapisan() {
