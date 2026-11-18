@@ -560,29 +560,46 @@ def fetch_wind(regions):
 
 # ------------------------------------------------------------ polusi udara
 OPEN_METEO_UDARA = ("https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}"
-                    "&hourly=pm2_5&forecast_hours=12&timezone=GMT")
-UDARA_ULANG = timedelta(hours=3)  # model CAMS diperbarui beberapa kali sehari; hemat kuota gratis Open-Meteo
+                    "&hourly=pm2_5&forecast_hours=18&timezone=GMT")
+# Kuota gratis Open-Meteo ±10.000 lokasi/hari: angin 384 titik tiap 2 jam (±4.600) + udara ±1.000 titik tiap 6 jam
+# (±4.000). Model CAMS global sendiri hanya diperbarui 2× sehari, jadi 6 jam tidak kehilangan apa-apa.
+UDARA_ULANG = timedelta(hours=6)
+UDARA_LANGKAH = 0.5  # derajat (±55 km); hanya titik di darat / dekat pantai
+UDARA_GRID = Path(__file__).with_name("grid_udara_darat.json")
+
+
+def grid_udara(regions):
+    """Titik grid 0,5° yang berada di darat Indonesia atau dekat pantai (salah satu dari 9 titik di sekitarnya
+    jatuh di dalam kabupaten/kota). Mahal dihitung (±20 dtk), jadi disimpan di file dan dipakai ulang."""
+    if UDARA_GRID.exists():
+        return [tuple(p) for p in json.loads(UDARA_GRID.read_text(encoding="utf-8"))]
+    regions = regions or RegionIndex(DATA / "wilayah.geojson")
+    s, grid, lat = UDARA_LANGKAH, [], BBOX[1] + UDARA_LANGKAH / 2
+    while lat <= BBOX[3]:
+        lon = BBOX[0] + UDARA_LANGKAH / 2
+        while lon <= BBOX[2]:
+            if any(regions.locate(lon + dx, lat + dy, coast_tolerance=0) for dx in (-s / 2, 0, s / 2) for dy in (-s / 2, 0, s / 2)):
+                grid.append((round(lon, 2), round(lat, 2)))
+            lon += UDARA_LANGKAH
+        lat += UDARA_LANGKAH
+    UDARA_GRID.write_text(json.dumps(grid, separators=(",", ":")), encoding="utf-8")
+    return grid
 
 
 def fetch_air(regions):
-    """PM2.5 (prakiraan model CAMS, per jam, 12 jam ke depan) di grid yang sama dengan angin, dari Open-Meteo.
-    Diambil ulang paling cepat tiap 3 jam."""
+    """PM2.5 (prakiraan model CAMS, per jam, 18 jam ke depan) di grid darat 0,5°, dari Open-Meteo.
+    Diambil ulang paling cepat tiap 6 jam."""
     lama = load_previous("udara.json")
-    if lama.get("diambil"):
+    grid = grid_udara(regions)
+    if lama.get("diambil") and len(lama.get("titik", [])) == len(grid):
         umur = NOW - datetime.fromisoformat(lama["diambil"].replace("Z", "+00:00"))
         jam_terakhir = datetime.fromisoformat(lama["jam"][-1] + "+00:00") if lama.get("jam") else NOW
         if umur < UDARA_ULANG and jam_terakhir > NOW + timedelta(hours=6):
             return lama, {"dipakai_ulang": True, "titik": len(lama.get("titik", []))}
-    grid = []
-    lat = BBOX[1] + 0.5
-    while lat <= BBOX[3]:
-        lon = BBOX[0] + 0.5
-        while lon <= BBOX[2]:
-            grid.append((round(lon, 2), round(lat, 2)))
-            lon += ANGIN_LANGKAH
-        lat += ANGIN_LANGKAH
     titik, jam = [], None
     for i in range(0, len(grid), 100):
+        if i:
+            time.sleep(15)  # batas Open-Meteo ±600 lokasi/menit: 100 lokasi tiap 15 dtk = 400/menit
         chunk = grid[i:i + 100]
         url = OPEN_METEO_UDARA.format(lat=",".join(str(c[1]) for c in chunk), lon=",".join(str(c[0]) for c in chunk))
         for coba in range(4):
@@ -593,7 +610,7 @@ def fetch_air(regions):
                 if coba == 3:
                     raise
                 print(f"    udara: percobaan {coba + 1} gagal ({e}), ulangi")
-                time.sleep(5 * (coba + 1))
+                time.sleep(30 * (coba + 1))  # 429 = kuota per menit habis: tunggu lebih lama
         if isinstance(data, dict):
             data = [data]
         for (lon, lat), d in zip(chunk, data):
@@ -606,6 +623,55 @@ def fetch_air(regions):
     if not titik:
         raise ValueError("Open-Meteo tidak mengembalikan data polusi udara")
     return {"diambil": iso(NOW), "sumber": "Open-Meteo (CAMS)", "jam": jam, "titik": titik}, {"dipakai_ulang": False, "titik": len(titik)}
+
+
+# ------------------------------------------------ ISPU resmi (stasiun KLH)
+ISPU_KLH = "https://ispu.kemenlh.go.id/apimobile/v1/getStations"
+ISPU_ZONA = {"WIB": 7, "WITA": 8, "WIT": 9}
+ISPU_PARAM = {"pm25": "PM2.5", "pm10": "PM10", "so2": "SO2", "co": "CO", "o3": "O3", "no2": "NO2", "hc": "HC"}
+
+
+def fetch_ispu():
+    """Stasiun pemantau kualitas udara resmi (ISPU, Kementerian Lingkungan Hidup), nilai per jam.
+    Data sama dengan peta ispu.kemenlh.go.id / aplikasi ISPUNet."""
+    rows = json.loads(get(ISPU_KLH, timeout=40)).get("rows") or []
+    features = []
+    for r in rows:
+        try:
+            lon, lat, val = float(r["lon"]), float(r["lat"]), int(float(r["val"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if r.get("stasiun_show") != "1" or r.get("is_maintenance") == "1" or r.get("stasiun_uji") == "1":
+            continue
+        if not in_bbox(lon, lat) or val <= 0:
+            continue
+        zona = (r.get("time_z") or "WIB").upper()
+        try:
+            lokal = datetime.strptime(r["waktu"], "%Y-%m-%d %H:%M:%S")
+            waktu = iso(lokal.replace(tzinfo=timezone(timedelta(hours=ISPU_ZONA.get(zona, 7)))))
+        except (KeyError, ValueError):
+            continue
+        sub = {}
+        for k, nama in ISPU_PARAM.items():
+            try:
+                v = int(float(r.get(f"t_{k}") or 0))
+            except ValueError:
+                v = 0
+            if v > 0:
+                sub[nama] = v
+        param = re.sub(r"<[^>]+>", "", r.get("param") or "").replace(",", ", ")
+        kat = r.get("kategori") or {}
+        features.append(point(lon, lat, {
+            "id": r.get("id_stasiun"), "nama": (r.get("nama") or "").strip(),
+            "kota": (r.get("kota") or "").strip(), "provinsi": (r.get("provinsi") or "").strip(),
+            "ispu": val, "kategori": (r.get("cat") or "").strip().capitalize(),
+            "keterangan": (kat.get("keterangan") or "").strip(),
+            "kritis": param, "sub": sub, "waktu": waktu, "zona": zona,
+            "pengelola": r.get("tipe_text") or "",
+        }))
+    if not features:
+        raise ValueError("ISPU KLH tidak mengembalikan stasiun")
+    return fc(features), {"stasiun": len(features)}
 
 
 # ------------------------------------------------- berita terkait laporan
@@ -811,7 +877,7 @@ def main():
 
     print("- polusi udara ...")
     try:
-        udara, info = fetch_air(None)
+        udara, info = fetch_air(regions)
         (LIVE / "udara.json").write_text(json.dumps(udara, separators=(",", ":")), encoding="utf-8")
         meta["lapisan"]["udara"] = {"ok": True, "jumlah": len(udara["titik"]), "diambil": udara["diambil"], **info}
         print(f"  {info}")
@@ -819,6 +885,20 @@ def main():
         traceback.print_exc()
         prev = old_meta.get("lapisan", {}).get("udara", {})
         meta["lapisan"]["udara"] = {**prev, "ok": False, "galat": str(e)[:200]}
+
+    print("- ISPU stasiun resmi ...")
+    try:
+        ispu, info = fetch_ispu()
+        (LIVE / "ispu.geojson").write_text(json.dumps(ispu, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+        meta["lapisan"]["ispu"] = {"ok": True, "jumlah": len(ispu["features"]), "diambil": iso(NOW), **info}
+        print(f"  {info}")
+    except Exception as e:
+        traceback.print_exc()
+        prev = old_meta.get("lapisan", {}).get("ispu", {})
+        meta["lapisan"]["ispu"] = {**prev, "ok": False, "galat": str(e)[:200]}
+        if not (LIVE / "ispu.geojson").exists():
+            lama = load_previous("ispu.geojson")
+            (LIVE / "ispu.geojson").write_text(json.dumps(lama if lama.get("features") else fc([])), encoding="utf-8")
 
     print("- berita terkait laporan ...")
     try:
