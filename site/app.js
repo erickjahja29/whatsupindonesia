@@ -51,12 +51,22 @@
     laporan: { title: "Laporan warga", sub: "7 hari terakhir · PetaBencana.id + berita media", c: "#3ea6ff", ic: "lapor", layers: ["laporan"] },
     // only = lapisan yang hanya tampil di mode ini (tidak di beranda)
     banjir: { title: "Banjir", sub: "Peringatan BMKG · laporan warga · data resmi BNPB", c: "#22d3ee", ic: "banjir",
-      layers: ["peringatan-fill", "peringatan-line", "bnpb-fill", "bnpb-line"], only: ["banjir-lapor-glow", "banjir-lapor"] },
+      layers: ["peringatan-fill", "peringatan-line", "bnpb-fill", "bnpb-line", "banjir-area-fill", "banjir-area-line"],
+      only: ["banjir-lapor-glow", "banjir-lapor"] },
+    gunung_api: { title: "Gunung api", sub: "Tingkat aktivitas · MAGMA Indonesia (PVMBG, Badan Geologi)", c: "#f59e0b", ic: "gunung",
+      layers: ["gunung_api", "gunung_api-label"] },
   };
+  // Tingkat aktivitas gunung api (PVMBG)
+  const LEVEL_GUNUNG = {
+    4: { nama: "Awas", rom: "IV", warna: "#ef4444" }, 3: { nama: "Siaga", rom: "III", warna: "#fb923c" },
+    2: { nama: "Waspada", rom: "II", warna: "#facc15" }, 1: { nama: "Normal", rom: "I", warna: "#94a3b8" },
+  };
+  const segitiga = (c) => `<svg viewBox="0 0 24 24" style="fill:${c};stroke:none"><path d="M12 3 22.5 20.5h-21z"/></svg>`;
   const WARNA_WASPADA = "#fbbf24", WARNA_BNPB = "#22d3ee";
 
   const state = {
-    data: { gempa: null, titik_panas: null, laporan: null, peringatan: null, banjir_bnpb: null, banjir: null },
+    data: { gempa: null, titik_panas: null, laporan: null, peringatan: null, banjir_bnpb: null, banjir: null,
+      gunung_api: null, banjir_area: null },
     berita: {}, meta: null, mode: null, jenis: "semua",
     pulseMarkers: [], popup: null, mapReady: false, ringsOwner: null, anim: 0,
     tick: { items: [], i: 0, timer: null }, lastQuake: null, firstLoad: true,
@@ -79,6 +89,11 @@
     return `${Math.round(h / 24)} hari lalu`;
   }
   const num = (n) => new Intl.NumberFormat("id-ID").format(n);
+  // Angka di dock/panel per lapisan
+  function hitung(mode) {
+    if (mode === "gunung_api") return (state.data.gunung_api?.features || []).filter((f) => f.properties.level >= 2).length;
+    return state.data[mode]?.features.length || 0;
+  }
   // Rapikan teks lokasi BMKG: "130 km BaratDaya MALUKUTENGGARA" -> "130 km barat daya Maluku Tenggara"
   function rapiLokasi(s) {
     if (!s) return s;
@@ -140,33 +155,58 @@
     return { top, bottom, left, right: 30 };
   }
 
+  // ---------- tema terang/gelap & pilihan pengguna (disimpan di browser) ----------
+  const GAYA = { gelap: "https://tiles.openfreemap.org/styles/dark", terang: "https://tiles.openfreemap.org/styles/positron" };
+  const simpan = (k, v) => { try { localStorage.setItem(k, v); } catch (_) { /* mode privat */ } };
+  const baca = (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+  state.tema = document.documentElement.dataset.theme === "light" ? "terang" : "gelap";
+  state.angin = baca("wui-angin") === "1";
+  const warnaTema = () => (state.tema === "terang"
+    ? { halo: "#ffffff", teks: "#0f172a", gelombang: "#334155", garis: "#7c8a9c", hover: "#0f172a" }
+    : { halo: "#07090d", teks: "#ffffff", gelombang: "#ffffff", garis: "#5b6b7c", hover: "#ffffff" });
+
   // ---------- peta ----------
   const map = new maplibregl.Map({
     container: "map",
-    style: "https://tiles.openfreemap.org/styles/dark", // gratis, tanpa API key (data OpenStreetMap)
+    style: GAYA[state.tema], // gratis, tanpa API key (data OpenStreetMap)
     center: [118, -2], zoom: REDUCED ? 3.6 : 1.4,        // intro: mulai jauh lalu terbang ke Indonesia
     maxBounds: [[40, -60], [200, 55]],
     attributionControl: { compact: true },
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
   map.addControl(new maplibregl.GeolocateControl({ trackUserLocation: false }), "bottom-right");
+  class KontrolAngin {
+    onAdd() {
+      const d = document.createElement("div");
+      d.className = "maplibregl-ctrl maplibregl-ctrl-group";
+      d.innerHTML = `<button type="button" id="angin-btn" class="ctrl-angin" aria-pressed="false" title="Angin: nyala/mati"
+        aria-label="Lapisan angin">${icon("angin")}</button>`;
+      d.querySelector("button").addEventListener("click", () => setAngin(!state.angin));
+      return d;
+    }
+    onRemove() { /* tidak dipakai */ }
+  }
+  map.addControl(new KontrolAngin(), "bottom-right");
 
-  map.on("load", () => {
+  // Lapisan data di atas peta dasar. Dipasang ulang setiap gaya peta berganti (tema terang/gelap).
+  function pasangLapisan() {
+    const W = warnaTema();
     map.addSource("wilayah", { type: "geojson", data: `${DATA}wilayah.geojson`, promoteId: "id" });
     const below = map.getLayer("highway_name_other") ? "highway_name_other" : undefined;
     map.addLayer({
       id: "wilayah-fill", type: "fill", source: "wilayah",
-      paint: { "fill-color": "#ffffff",
+      paint: { "fill-color": W.hover,
         "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.07, 0.0] },
     }, below);
     map.addLayer({
       id: "wilayah-line", type: "line", source: "wilayah",
-      paint: { "line-color": "#5b6b7c", "line-opacity": ["interpolate", ["linear"], ["zoom"], 4, 0.2, 8, 0.55],
+      paint: { "line-color": W.garis, "line-opacity": ["interpolate", ["linear"], ["zoom"], 4, 0.2, 8, 0.55],
         "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.3, 9, 1.2] },
     }, below);
 
     const empty = { type: "FeatureCollection", features: [] };
-    for (const s of ["titik_panas", "gempa", "laporan", "guncangan", "guncangan-label", "gelombang", "peringatan"]) {
+    for (const s of ["titik_panas", "gempa", "laporan", "guncangan", "guncangan-label", "gelombang", "peringatan",
+      "gunung_api", "banjir_area"]) {
       map.addSource(s, { type: "geojson", data: empty });
     }
 
@@ -179,6 +219,14 @@
       paint: { "fill-color": WARNA_BNPB, "fill-opacity": 0.22 } });
     map.addLayer({ id: "bnpb-line", type: "line", source: "wilayah", filter: ["in", ["get", "id"], ["literal", []]],
       paint: { "line-color": WARNA_BNPB, "line-width": 2.2 } });
+    // Garis tepi wilayah hasil pencarian / yang sedang dilihat ringkasannya
+    map.addLayer({ id: "sorot-line", type: "line", source: "wilayah",
+      filter: ["in", ["get", "id"], ["literal", state.sorot || []]],
+      paint: { "line-color": state.tema === "terang" ? "#0f172a" : "#ffd166", "line-width": 2.4, "line-dasharray": [2, 1.2] } });
+    // Area RT/RW tergenang (PetaBencana.id), warna menurut tinggi air
+    const warnaArea = ["match", ["get", "level"], 4, "#1d4ed8", 3, "#2563eb", 2, "#3b82f6", "#93c5fd"];
+    map.addLayer({ id: "banjir-area-fill", type: "fill", source: "banjir_area", paint: { "fill-color": warnaArea, "fill-opacity": 0.45 } });
+    map.addLayer({ id: "banjir-area-line", type: "line", source: "banjir_area", paint: { "line-color": warnaArea, "line-width": 1.2 } });
 
     // Lingkaran perkiraan guncangan + gelombang kejut (muncul saat gempa diklik)
     map.addLayer({ id: "guncangan-fill", type: "fill", source: "guncangan",
@@ -186,11 +234,11 @@
     map.addLayer({ id: "guncangan-line", type: "line", source: "guncangan",
       paint: { "line-color": ["get", "warna"], "line-width": 1.6, "line-opacity": 0.9, "line-dasharray": [3, 2] } });
     map.addLayer({ id: "gelombang", type: "line", source: "gelombang",
-      paint: { "line-color": "#ffffff", "line-width": 2.2, "line-opacity": ["get", "o"], "line-blur": 1 } });
+      paint: { "line-color": W.gelombang, "line-width": 2.2, "line-opacity": ["get", "o"], "line-blur": 1 } });
     map.addLayer({ id: "guncangan-label", type: "symbol", source: "guncangan-label",
       layout: { "text-field": ["get", "label"], "text-font": ["Noto Sans Bold"], "text-size": 11,
         "text-anchor": "bottom", "text-allow-overlap": true },
-      paint: { "text-color": ["get", "warna"], "text-halo-color": "#07090d", "text-halo-width": 1.6 } });
+      paint: { "text-color": ["get", "warna"], "text-halo-color": W.halo, "text-halo-width": 1.6 } });
 
     map.addLayer({
       id: "titik_panas-glow", type: "heatmap", source: "titik_panas", maxzoom: 9,
@@ -214,6 +262,32 @@
         "circle-stroke-color": "#2a0000",
       },
     });
+    // Gunung api: segitiga (gambar SDF agar bisa diwarnai per tingkat aktivitas)
+    if (!map.hasImage("segitiga")) {
+      const n = 48, cv = document.createElement("canvas");
+      cv.width = cv.height = n;
+      const cx = cv.getContext("2d");
+      cx.fillStyle = "#fff";
+      cx.beginPath(); cx.moveTo(n / 2, 4); cx.lineTo(n - 3, n - 6); cx.lineTo(3, n - 6); cx.closePath(); cx.fill();
+      map.addImage("segitiga", cx.getImageData(0, 0, n, n), { sdf: true, pixelRatio: 2 });
+    }
+    const warnaLevel = ["match", ["get", "level"], 4, LEVEL_GUNUNG[4].warna, 3, LEVEL_GUNUNG[3].warna,
+      2, LEVEL_GUNUNG[2].warna, LEVEL_GUNUNG[1].warna];
+    map.addLayer({
+      id: "gunung_api", type: "symbol", source: "gunung_api",
+      layout: { "icon-image": "segitiga", "icon-allow-overlap": true, "symbol-sort-key": ["get", "level"],
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 4, ["match", ["get", "level"], 1, 0.55, 2, 0.75, 1], 9,
+          ["match", ["get", "level"], 1, 0.9, 2, 1.1, 1.4]] },
+      paint: { "icon-color": warnaLevel, "icon-opacity": ["match", ["get", "level"], 1, 0.55, 1],
+        "icon-halo-color": W.halo, "icon-halo-width": 1.5 },
+    });
+    map.addLayer({
+      id: "gunung_api-label", type: "symbol", source: "gunung_api",
+      filter: ["step", ["zoom"], [">=", ["get", "level"], 3], 6.5, [">=", ["get", "level"], 2], 8.5, true],
+      layout: { "text-field": ["get", "nama"], "text-font": ["Noto Sans Bold"], "text-size": 11, "text-offset": [0, 1.1],
+        "text-anchor": "top", "text-optional": true },
+      paint: { "text-color": warnaLevel, "text-halo-color": W.halo, "text-halo-width": 1.4 },
+    });
     map.addLayer({
       id: "gempa", type: "circle", source: "gempa",
       paint: {
@@ -229,7 +303,7 @@
       filter: [">=", ["coalesce", ["get", "magnitudo"], 0], 5],
       layout: { "text-field": ["concat", "M", ["to-string", ["get", "magnitudo"]]],
         "text-font": ["Noto Sans Bold"], "text-size": 11, "text-offset": [0, -1.9] },
-      paint: { "text-color": "#fff", "text-halo-color": "#07090d", "text-halo-width": 1.4 },
+      paint: { "text-color": W.teks, "text-halo-color": W.halo, "text-halo-width": 1.4 },
     });
     map.addLayer({
       id: "laporan", type: "circle", source: "laporan",
@@ -250,6 +324,42 @@
       paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 4, 6, 10, 10], "circle-color": "#3ea6ff",
         "circle-stroke-color": "#ffffff", "circle-stroke-width": 2 } });
 
+    // Angin: panah menunjuk ke arah angin bertiup, warna = kecepatan (km/jam)
+    if (!map.hasImage("panah")) {
+      const n = 40, cv = document.createElement("canvas");
+      cv.width = cv.height = n;
+      const cx = cv.getContext("2d");
+      cx.fillStyle = "#fff";
+      cx.beginPath(); cx.moveTo(20, 2); cx.lineTo(31, 16); cx.lineTo(23.5, 16); cx.lineTo(23.5, 38); cx.lineTo(16.5, 38);
+      cx.lineTo(16.5, 16); cx.lineTo(9, 16); cx.closePath(); cx.fill();
+      map.addImage("panah", cx.getImageData(0, 0, n, n), { sdf: true, pixelRatio: 2 });
+    }
+    map.addSource("angin", { type: "geojson", data: empty });
+    // Titik grid tak terlihat: target klik untuk info angin (animasinya digambar di kanvas terpisah)
+    map.addLayer({ id: "angin-hit", type: "circle", source: "angin",
+      layout: { visibility: state.angin ? "visible" : "none" },
+      paint: { "circle-radius": 14, "circle-opacity": 0, "circle-stroke-opacity": 0 } });
+    // Panah statis hanya untuk pengguna yang mematikan animasi (prefers-reduced-motion)
+    map.addLayer({
+      id: "angin", type: "symbol", source: "angin",
+      layout: { visibility: state.angin && REDUCED ? "visible" : "none", "icon-image": "panah", "icon-rotate": ["get", "ke"],
+        "icon-rotation-alignment": "map", "icon-allow-overlap": true, "icon-ignore-placement": true,
+        "icon-size": ["interpolate", ["linear"], ["get", "v"], 0, 0.55, 40, 1.1] },
+      paint: { "icon-color": ["interpolate", ["linear"], ["get", "v"], ...SKALA_ANGIN.flat()],
+        "icon-opacity": 0.85, "icon-halo-color": state.tema === "terang" ? "rgba(15,23,42,.55)" : W.halo,
+        "icon-halo-width": state.tema === "terang" ? 0.8 : 1 },
+    }, "titik_panas-glow");
+  }
+
+  map.on("style.load", () => {
+    pasangLapisan();
+    if (!state.mapReady) return;      // muat pertama: sisanya di handler "load"
+    if (state.data.gempa) applyToMap();
+    applyMode(false);
+    terapkanAngin();
+  });
+
+  map.on("load", () => {
     // Atribusi peta (ⓘ): MapLibre membukanya otomatis saat awal; tutup, buka hanya bila diklik
     const tutupAtribusi = () => document.querySelector(".maplibregl-ctrl-attrib.maplibregl-compact")
       ?.classList.remove("maplibregl-compact-show");
@@ -270,6 +380,7 @@
     state.mapReady = true;
     if (state.data.gempa) applyToMap();
     applyMode(false);
+    terapkanAngin();
     // Intro: terbang dari jauh ke Indonesia
     setTimeout(() => map.fitBounds(INDONESIA, { padding: viewPadding(), duration: REDUCED ? 0 : 2600,
       curve: 1.6, essential: true }), REDUCED ? 0 : 250);
@@ -279,7 +390,8 @@
   async function loadLive() {
     try {
       const kosong = { type: "FeatureCollection", features: [] };
-      const [meta, gempa, titik_panas, laporan, berita, peringatan, banjir_bnpb, bGempa, bBanjir, bApi] = await Promise.all([
+      const [meta, gempa, titik_panas, laporan, berita, peringatan, banjir_bnpb, bGempa, bBanjir, bApi,
+        gunung_api, banjir_area, bGunung, angin] = await Promise.all([
         getJSON("live/meta.json"), getJSON("live/gempa.geojson"),
         getJSON("live/titik_panas.geojson"), getJSON("live/laporan.geojson"),
         getJSON("live/berita_laporan.json").catch(() => ({})),
@@ -288,11 +400,19 @@
         getJSON("live/berita_gempa.json").catch(() => ({})),
         getJSON("live/berita_banjir.json").catch(() => ({})),
         getJSON("live/berita_api.json").catch(() => ({})),
+        getJSON("live/gunung_api.geojson").catch(() => kosong),
+        getJSON("live/banjir_area.geojson").catch(() => kosong),
+        getJSON("live/berita_gunung.json").catch(() => ({})),
+        getJSON("live/angin.json").catch(() => null),
       ]);
       for (const f of gempa.features) f.properties.lokasi = rapiLokasi(f.properties.lokasi);
       state.beritaGempa = bGempa;
       state.beritaBanjir = bBanjir;
       state.beritaApi = bApi;
+      state.beritaGunung = bGunung;
+      state.anginData = angin;
+      state.data.gunung_api = gunung_api;
+      state.data.banjir_area = banjir_area;
       // peringatan BMKG cepat kedaluwarsa (1–3 jam): buang yang sudah lewat
       peringatan.features = peringatan.features.filter((f) => new Date(f.properties.berakhir) > Date.now());
       state.data.peringatan = peringatan;
@@ -312,7 +432,7 @@
       renderTicker();
       if (state.mode) { renderPanel(); applyListVisibility(); }
       updateCtrl();
-      if (state.mapReady) applyToMap();
+      if (state.mapReady) { applyToMap(); terapkanAngin(); }
       state.firstLoad = false;
     } catch (e) {
       console.error(e);
@@ -321,7 +441,7 @@
   }
 
   function applyToMap() {
-    for (const k of ["gempa", "titik_panas", "laporan", "peringatan"]) map.getSource(k).setData(state.data[k]);
+    for (const k of ["gempa", "titik_panas", "laporan", "peringatan", "gunung_api", "banjir_area"]) map.getSource(k).setData(state.data[k]);
     const ids = [...new Set(state.data.banjir_bnpb.features.map((f) => f.properties.wilayah_id).filter(Boolean))];
     for (const l of ["bnpb-fill", "bnpb-line"]) map.setFilter(l, ["in", ["get", "id"], ["literal", ids]]);
     renderPulses();
@@ -332,10 +452,10 @@
     const m = state.meta;
     const bad = Object.entries(m.lapisan).filter(([, v]) => !v.ok).map(([k]) => k.replace("_", " "));
     $("#updated").innerHTML = `Diperbarui <b>${esc(ago(m.diperbarui))}</b> · ${esc(fmtWIB(m.diperbarui))}` +
-      (bad.length ? `<br><span style="color:#ffb3b4">Sumber bermasalah: ${esc(bad.join(", "))}</span>` : "");
+      (bad.length ? `<br><span class="warn">Sumber bermasalah: ${esc(bad.join(", "))}</span>` : "");
   }
   function renderDock() {
-    for (const k of Object.keys(MODES)) countUp($(`#n-${k}`), state.data[k].features.length);
+    for (const k of Object.keys(MODES)) { const el = $(`#n-${k}`); if (el) countUp(el, hitung(k)); }
   }
 
   // ---------- ticker live ----------
@@ -374,6 +494,15 @@
       items.push({ c: WARNA_WASPADA, badge: icon("banjir"), kicker: "Waspada banjir · peringatan BMKG",
         main: `Hujan lebat di ${num(prov.length)} provinsi`, sub: prov.slice(0, 3).join(", ") + (prov.length > 3 ? ", …" : ""),
         go: () => setMode("banjir") });
+    }
+    const gTinggi = (state.data.gunung_api?.features || []).filter((f) => f.properties.level >= 3);
+    if (gTinggi.length) {
+      const lv = Math.max(...gTinggi.map((f) => f.properties.level)), L = LEVEL_GUNUNG[lv];
+      const atas = gTinggi.filter((f) => f.properties.level === lv);
+      items.push({ c: L.warna, badge: icon("gunung"), kicker: "Gunung api · MAGMA Indonesia",
+        main: `${num(atas.length)} gunung berstatus ${L.nama} (Level ${L.rom})`,
+        sub: atas.map((f) => f.properties.nama).slice(0, 3).join(", ") + (atas.length > 3 ? ", …" : ""),
+        go: () => { setMode("gunung_api"); if (atas.length === 1) setTimeout(() => focusVolcano(atas[0]), 80); } });
     }
     const lap = state.data.laporan.features[0];
     if (lap) {
@@ -462,7 +591,7 @@
     btn.hidden = !mode || !hide;
     if (mode) {
       btn.style.setProperty("--c", MODES[mode].c);
-      const n = state.data[mode] ? ` <b>${num(state.data[mode].features.length)}</b>` : "";
+      const n = state.data.gempa ? ` <b>${num(hitung(mode))}</b>` : "";
       $("#show-list-txt").innerHTML = `Daftar ${esc(MODES[mode].title.toLowerCase())}${n}`;
     }
   }
@@ -517,7 +646,7 @@
     ic.innerHTML = icon(cfg.ic);
     $("#p-sub").textContent = cfg.sub;
     if (!state.data.gempa) return;
-    $("#p-count").textContent = num(state.data[mode].features.length);
+    $("#p-count").textContent = num(hitung(mode));
     const legend = legendHTML(mode);
     $("#legend").innerHTML = legend;
     $("#legend").hidden = !legend;
@@ -533,7 +662,12 @@
     if (mode === "banjir") {
       return `<div class="row"><span class="key" style="--c:${WARNA_WASPADA}55;--b:${WARNA_WASPADA}"><i></i>Waspada (BMKG)</span>
         <span class="key" style="--c:#3ea6ff;--b:#fff"><i style="border-radius:50%"></i>Terjadi (warga)</span>
-        <span class="key" style="--c:${WARNA_BNPB}44;--b:${WARNA_BNPB}"><i></i>Resmi (BNPB)</span></div>`;
+        <span class="key" style="--c:${WARNA_BNPB}44;--b:${WARNA_BNPB}"><i></i>Resmi (BNPB)</span>
+        ${state.data.banjir_area?.features.length ? `<span class="key" style="--c:#3b82f688;--b:#3b82f6"><i></i>Area tergenang</span>` : ""}</div>`;
+    }
+    if (mode === "gunung_api") {
+      return `<div class="row">${[4, 3, 2, 1].map((lv) => `<span class="key tri">${segitiga(LEVEL_GUNUNG[lv].warna)}${LEVEL_GUNUNG[lv].nama}</span>`).join("")}</div>
+        <div class="note">Level I Normal sampai IV Awas. Ikuti rekomendasi dan jarak aman dari PVMBG.</div>`;
     }
     return ""; // gempa & laporan: cukup daftar
   }
@@ -615,6 +749,35 @@
           <div class="item-sub">${esc(tglID(p.tanggal))} · ${esc(p.kategori)}${p.rumah_terendam ? ` · ${num(p.rumah_terendam)} rumah terendam` : ""}${p.mengungsi ? ` · ${num(p.mengungsi)} mengungsi` : ""}</div></span></button>`;
       }).join("") + `<div class="sec-note">Data resmi diperbarui mingguan, bisa tertinggal beberapa hari.</div>`
         : `<div class="sec-note">Belum ada kejadian banjir tercatat BNPB minggu ini.</div>`;
+      const area = state.data.banjir_area?.features || [];
+      if (area.length) {
+        html += sec("Area tergenang · PetaBencana 48 jam", "#3b82f6", area.length);
+        html += area.map((f) => {
+          const p = f.properties; rows.push({ kind: "area", f });
+          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:#3b82f626;color:#60a5fa">${icon("banjir")}</span>
+            <span class="item-main"><div class="item-title">${esc(p.nama)}</div>
+            <div class="item-sub">${esc(p.kota || "")}${p.kota ? " · " : ""}tinggi air ${esc(p.tinggi)} · ${esc(ago(p.waktu))}</div></span></button>`;
+        }).join("");
+      }
+    } else if (t === "gunung_api") {
+      const semua = state.data.gunung_api?.features || [];
+      let i = 0;
+      for (const lv of [4, 3, 2]) {
+        const g = semua.filter((f) => f.properties.level === lv);
+        if (!g.length) continue;
+        const L = LEVEL_GUNUNG[lv];
+        html += `<div class="sec-title" style="--c:${L.warna}"><i></i>Level ${L.rom} · ${L.nama}<span>${num(g.length)}</span></div>`;
+        html += g.map((f) => {
+          const p = f.properties, nb = beritaGunung(p).length; rows.push(f);
+          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${L.warna}22">${segitiga(L.warna)}</span>
+            <span class="item-main"><div class="item-title">${esc(p.nama)}</div>
+            <div class="item-sub">${esc(p.lokasi || where(p))}${p.periode ? ` · laporan ${esc(p.periode.split(" · ")[0])}` : ""}</div>
+            ${p.erupsi ? `<span class="item-flag">Erupsi tercatat</span>` : ""}
+            ${nb ? `<span class="item-news">${icon("berita")} ${nb} berita</span>` : ""}</span></button>`;
+        }).join("");
+      }
+      const normal = semua.filter((f) => f.properties.level === 1).length;
+      html += normal ? `<div class="sec-note" style="margin-top:10px">${num(normal)} gunung lain berstatus Normal (segitiga abu-abu di peta).</div>` : "";
     } else {
       rows = state.data.laporan.features.filter((f) => state.jenis === "semua" || f.properties.jenis === state.jenis);
       html = rows.map((f, i) => {
@@ -633,8 +796,10 @@
       else if (t === "banjir") {
         if (r.kind === "waspada") focusWarning(r.f);
         else if (r.kind === "resmi") focusBnpb(r.f.properties.wilayah_id, r.f);
+        else if (r.kind === "area") focusArea(r.f);
         else focusFeature("laporan", r.f);
-      } else focusFeature(t, r);
+      } else if (t === "gunung_api") focusVolcano(r);
+      else focusFeature(t, r);
     }));
   }
 
@@ -655,16 +820,23 @@
       map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
     }
-    for (const id of ["banjir-lapor", "peringatan-fill", "bnpb-fill"]) {
+    for (const id of ["banjir-lapor", "peringatan-fill", "bnpb-fill", "gunung_api", "banjir-area-fill"]) {
       map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
     }
     map.on("click", (e) => {
-      const layers = ["laporan", "banjir-lapor", "gempa", "titik_panas", "bnpb-fill", "peringatan-fill", "wilayah-fill"]
-        .filter((id) => map.getLayoutProperty(id, "visibility") !== "none");
+      const layers = ["gunung_api", "laporan", "banjir-lapor", "gempa", "titik_panas", "banjir-area-fill", "bnpb-fill",
+        "peringatan-fill", "angin", "angin-hit", "wilayah-fill"].filter((id) => map.getLayoutProperty(id, "visibility") !== "none");
       const hits = map.queryRenderedFeatures(e.point, { layers });
       if (!hits.length) return;
       let f = hits[0], layer = f.layer.id;
+      if (layer === "gunung_api") {
+        clearRings();
+        const full = state.data.gunung_api.features.find((x) => x.properties.id === f.properties.id) || f;
+        return showVolcano(full, { lng: full.geometry.coordinates[0], lat: full.geometry.coordinates[1] });
+      }
+      if (layer === "banjir-area-fill") { clearRings(); return showAreaPopup(f, e.lngLat); }
+      if (layer === "angin" || layer === "angin-hit") { clearRings(); return showWindPopup(f); }
       if (layer === "banjir-lapor") layer = "laporan";
       if (layer === "wilayah-fill") { clearRings(); return showRegionPopup(f.properties, e.lngLat); }
       if (layer === "bnpb-fill") { clearRings(); return showBnpbPopup(f.properties.id, e.lngLat); }
@@ -745,6 +917,8 @@
       grip.setAttribute("aria-expanded", String(open));
       updateCtrl();
     });
+    $("#tema-btn").addEventListener("click", () => setTema(state.tema === "terang" ? "gelap" : "terang"));
+    $("#tema-btn").setAttribute("aria-pressed", String(state.tema === "terang"));
     const infoBtn = $("#info-btn");
     infoBtn.addEventListener("click", () => {
       const show = $("#info").hidden;
@@ -754,6 +928,7 @@
     });
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.mode) setMode(null); });
     wireTicker();
+    wireCari();
   }
 
   function popupAt(lngLat, html, onClose, anchor) {
@@ -1092,28 +1267,402 @@
     setTimeout(() => showBnpbPopup(wilayahId, { lng, lat }), 0);
   }
 
+  function showAreaPopup(f, lngLat) {
+    const p = f.properties;
+    popupAt(lngLat, `<div class="pop"><h3><span class="hi" style="--c:#3b82f6">${icon("banjir")}</span>Area tergenang</h3>
+      <div class="sub">${esc(p.nama)}${p.kota ? ` · ${esc(p.kota)}` : ""}</div>
+      <dl><dt>Tinggi air</dt><dd>${esc(p.tinggi)}</dd><dt>Diperbarui</dt><dd>${esc(ago(p.waktu))} · ${esc(fmtWIB(p.waktu))}</dd></dl>
+      <div class="src">Sumber: PetaBencana.id (laporan warga &amp; petugas yang sudah diverifikasi).</div></div>`);
+  }
+  function focusArea(f) {
+    if (!state.mapReady) return;
+    closeSheet(); clearRings();
+    const pts = f.geometry.type === "MultiPolygon" ? f.geometry.coordinates.flatMap((poly) => poly[0]) : f.geometry.coordinates[0];
+    const b = boundsOf(pts);
+    map.fitBounds(b, { padding: viewPadding(), maxZoom: 15, duration: REDUCED ? 0 : 1000 });
+    setTimeout(() => showAreaPopup(f, b.getCenter()), 0);
+  }
+
+  // ---------- angin (Open-Meteo, prakiraan per jam) ----------
+  const SKALA_ANGIN = [[0, "#93c5fd"], [10, "#5eead4"], [20, "#a3e635"], [30, "#facc15"], [40, "#fb923c"], [55, "#ef4444"]];
+  const ARAH = ["utara", "timur laut", "timur", "tenggara", "selatan", "barat daya", "barat", "barat laut"];
+  const namaArah = (deg) => ARAH[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+  // indeks jam prakiraan yang sedang berlaku (jam dalam UTC tanpa zona)
+  function jamAngin() {
+    const jam = state.anginData?.jam || [];
+    let i = 0;
+    jam.forEach((t, k) => { if (Date.parse(t + ":00Z") <= Date.now()) i = k; });
+    return i;
+  }
+  function anginGeo() {
+    const d = state.anginData;
+    if (!d) return { type: "FeatureCollection", features: [] };
+    const i = jamAngin();
+    return { type: "FeatureCollection", features: d.titik.map(([lon, lat, v, arah, g], k) => ({
+      type: "Feature", geometry: { type: "Point", coordinates: [lon, lat] },
+      properties: { k, v: v[i], dari: arah[i], ke: (arah[i] + 180) % 360, g: g?.[i] ?? null } })) };
+  }
+  function terapkanAngin() {
+    const btn = $("#angin-btn");
+    if (btn) btn.setAttribute("aria-pressed", String(state.angin));
+    const ada = !!state.anginData;
+    if (!state.mapReady || !map.getSource("angin")) return;
+    map.getSource("angin").setData(state.angin ? anginGeo() : { type: "FeatureCollection", features: [] });
+    map.setLayoutProperty("angin", "visibility", state.angin && REDUCED ? "visible" : "none");
+    map.setLayoutProperty("angin-hit", "visibility", state.angin ? "visible" : "none");
+    if (state.angin && ada && !REDUCED) mulaiAngin(); else hentikanAngin();
+    updateCtrl();
+  }
+
+  // ---------- animasi partikel angin ----------
+  // Partikel hanyut mengikuti angin (u/v diinterpolasi bilinear dari grid), meninggalkan jejak yang memudar.
+  // Satu warna netral (abu-abu) agar tidak ramai; kecepatan angin terlihat dari laju gerak partikel
+  const WARNA_PARTIKEL = { gelap: "rgba(214, 222, 232, 0.55)", terang: "rgba(30, 41, 59, 0.5)" };
+  const AG = { cv: null, ctx: null, grid: null, p: [], raf: 0, gerak: false, w: 0, h: 0 };
+  function siapkanGrid() {
+    const d = state.anginData, i = jamAngin();
+    const key = `${d.diambil}|${i}`;
+    if (AG.grid?.key === key) return;
+    const lons = [...new Set(d.titik.map((t) => t[0]))].sort((a, b) => a - b);
+    const lats = [...new Set(d.titik.map((t) => t[1]))].sort((a, b) => a - b);
+    const nx = lons.length, ny = lats.length, U = new Float32Array(nx * ny), V = new Float32Array(nx * ny);
+    const ix = new Map(lons.map((v, k) => [v, k])), iy = new Map(lats.map((v, k) => [v, k]));
+    for (const [lon, lat, s, a] of d.titik) {
+      const k = iy.get(lat) * nx + ix.get(lon), r = a[i] * Math.PI / 180;
+      U[k] = -s[i] * Math.sin(r); V[k] = -s[i] * Math.cos(r);   // arah = asal angin -> vektor ke arah tiupan
+    }
+    AG.grid = { key, x0: lons[0], y0: lats[0], dx: lons[1] - lons[0], dy: lats[1] - lats[0], nx, ny, U, V };
+  }
+  function anginDi(lon, lat) {
+    const g = AG.grid, fx = (lon - g.x0) / g.dx, fy = (lat - g.y0) / g.dy;
+    if (fx < 0 || fy < 0 || fx > g.nx - 1 || fy > g.ny - 1) return null;
+    const i = Math.floor(fx), j = Math.floor(fy), i1 = Math.min(i + 1, g.nx - 1), j1 = Math.min(j + 1, g.ny - 1);
+    const tx = fx - i, ty = fy - j;
+    const b = (A) => A[j * g.nx + i] * (1 - tx) * (1 - ty) + A[j * g.nx + i1] * tx * (1 - ty)
+      + A[j1 * g.nx + i] * (1 - tx) * ty + A[j1 * g.nx + i1] * tx * ty;
+    return [b(g.U), b(g.V)];
+  }
+  function lahir(pt) {
+    const b = map.getBounds(), g = AG.grid;
+    const w = Math.max(b.getWest(), g.x0), e = Math.min(b.getEast(), g.x0 + g.dx * (g.nx - 1));
+    const s = Math.max(b.getSouth(), g.y0), n = Math.min(b.getNorth(), g.y0 + g.dy * (g.ny - 1));
+    pt.mati = w >= e || s >= n;
+    if (!pt.mati) { pt.lon = w + Math.random() * (e - w); pt.lat = s + Math.random() * (n - s); }
+    pt.umur = 80 + Math.floor(Math.random() * 100);
+    return pt;
+  }
+  function ukurKanvas() {
+    const c = map.getContainer(), dpr = Math.min(window.devicePixelRatio || 1, 2);
+    AG.w = c.clientWidth; AG.h = c.clientHeight;
+    AG.cv.width = AG.w * dpr; AG.cv.height = AG.h * dpr;
+    AG.cv.style.width = `${AG.w}px`; AG.cv.style.height = `${AG.h}px`;
+    AG.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  function isiPartikel() {
+    if (!AG.grid) return;
+    // jarang: kira-kira 1 partikel per 55×55 px layar
+    const n = Math.round(Math.min(isMobile() ? 320 : 900, Math.max(150, AG.w * AG.h / 3000)));
+    AG.p = Array.from({ length: n }, () => lahir({}));
+    AG.p.forEach((pt) => { pt.umur = Math.floor(Math.random() * 180); }); // tidak lahir & mati serempak
+  }
+  const bersihkanKanvas = () => AG.ctx && AG.ctx.clearRect(0, 0, AG.w, AG.h);
+  function frameAngin() {
+    AG.raf = requestAnimationFrame(frameAngin);
+    if (AG.gerak || !AG.grid || document.hidden) return;
+    const c = AG.ctx;
+    c.globalCompositeOperation = "destination-in";       // jejak lama memudar
+    c.fillStyle = "rgba(0,0,0,0.94)";
+    c.fillRect(0, 0, AG.w, AG.h);
+    c.globalCompositeOperation = "source-over";
+    // Laju sebanding kecepatan angin: 10 km/jam ≈ 0,4 px/frame, 40 km/jam ≈ 1,6 px/frame (sama di semua zoom)
+    const k = 0.0018 * Math.pow(2, 4 - map.getZoom());
+    const jalur = new Path2D();
+    for (const pt of AG.p) {
+      if (pt.mati || --pt.umur < 0) { lahir(pt); continue; }
+      const uv = anginDi(pt.lon, pt.lat);
+      if (!uv) { lahir(pt); continue; }
+      const a = map.project([pt.lon, pt.lat]);
+      pt.lon += uv[0] * k / Math.cos(pt.lat * Math.PI / 180);
+      pt.lat += uv[1] * k;
+      const b = map.project([pt.lon, pt.lat]);
+      jalur.moveTo(a.x, a.y); jalur.lineTo(b.x, b.y);
+    }
+    c.lineWidth = 1.3; c.lineCap = "round";
+    c.strokeStyle = WARNA_PARTIKEL[state.tema];
+    c.stroke(jalur);
+  }
+  function mulaiAngin() {
+    if (!AG.cv) {
+      AG.cv = document.createElement("canvas");
+      AG.cv.className = "angin-kanvas";
+      AG.ctx = AG.cv.getContext("2d");
+      map.getCanvas().after(AG.cv);   // tepat di atas peta, di bawah penanda & UI
+      map.on("movestart", () => { AG.gerak = true; bersihkanKanvas(); });
+      map.on("moveend", () => { AG.gerak = false; if (AG.raf) isiPartikel(); });
+      map.on("resize", () => { if (AG.raf) { ukurKanvas(); isiPartikel(); } });
+    }
+    AG.cv.hidden = false;
+    const baru = !AG.raf;
+    siapkanGrid();
+    if (baru) { ukurKanvas(); isiPartikel(); AG.raf = requestAnimationFrame(frameAngin); }
+  }
+  function hentikanAngin() {
+    if (AG.raf) cancelAnimationFrame(AG.raf);
+    AG.raf = 0;
+    if (AG.cv) { bersihkanKanvas(); AG.cv.hidden = true; }
+  }
+  function setAngin(on) {
+    state.angin = on;
+    simpan("wui-angin", on ? "1" : "0");
+    if (!on && state.popup && state.popupAngin) state.popup.remove();
+    terapkanAngin();
+  }
+  function showWindPopup(f) {
+    const d = state.anginData, p = f.properties, i = jamAngin(), row = d.titik[p.k];
+    const lanjut = [3, 6, 9].filter((h) => row[2][i + h] != null).map((h) => {
+      const v = row[2][i + h], a = row[3][i + h];
+      return `<div><b>${num(v)}</b><span>${esc(jamWIB(d.jam[i + h] + ":00Z").replace(" WIB", ""))}<br>dari ${esc(namaArah(a))}</span></div>`;
+    }).join("");
+    const [lng, lat] = f.geometry.coordinates;
+    popupAt({ lng, lat }, `<div class="pop"><h3><span class="hi" style="--c:#14b8a6">${icon("angin")}</span>Angin ${num(p.v)} km/jam</h3>
+      <div class="sub">Bertiup <b>dari ${esc(namaArah(p.dari))}</b> (${p.dari}°)${p.g != null ? ` · hembusan hingga ${num(p.g)} km/jam` : ""}</div>
+      ${lanjut ? `<div class="sec-h" style="margin-top:4px">Prakiraan berikutnya (km/jam)</div><div class="grid3">${lanjut}</div>` : ""}
+      <div class="src">Angin 10 m di atas permukaan, titik grid ±165 km · model cuaca via Open-Meteo. Bukan peringatan resmi BMKG.</div></div>`);
+    state.popupAngin = true;
+    state.popup.on("close", () => { state.popupAngin = false; });
+  }
+
+  function setTema(t) {
+    state.tema = t;
+    simpan("wui-tema", t);
+    document.documentElement.dataset.theme = t === "terang" ? "light" : "dark";
+    document.querySelector('meta[name="theme-color"]').setAttribute("content", t === "terang" ? "#eef1f5" : "#07090d");
+    $("#tema-btn").setAttribute("aria-pressed", String(t === "terang"));
+    $("#tema-btn").title = t === "terang" ? "Ganti ke mode gelap" : "Ganti ke mode terang";
+    if (state.popup) state.popup.remove();
+    map.setStyle(GAYA[t], { diff: false });
+  }
+
+  // ---------- gunung api ----------
+  function beritaGunung(p) {
+    for (const d of [0, 1]) { const v = state.beritaGunung?.[`${p.id}|${hariWIB(d)}`]; if (v) return v.berita; }
+    return [];
+  }
+  function showVolcano(f, lngLat, buka) {
+    const p = f.properties, L = LEVEL_GUNUNG[p.level] || LEVEL_GUNUNG[1];
+    const url = safeUrl(p.tautan), bl = beritaGunung(p);
+    const lap = p.level >= 2 && (p.visual || p.kegempaan) ? `<dl class="dl-stack">
+        ${p.visual ? `<dt>Visual</dt><dd>${esc(p.visual)}</dd>` : ""}
+        ${p.lainnya ? `<dt>Lainnya</dt><dd>${esc(p.lainnya)}</dd>` : ""}
+        ${p.kegempaan ? `<dt>Kegempaan</dt><dd>${esc(p.kegempaan)}</dd>` : ""}</dl>` : "";
+    const rek = (p.rekomendasi || []).length ? `<ol class="rek">${p.rekomendasi.map((r) => `<li>${esc(r)}</li>`).join("")}</ol>` : "";
+    popupAt(lngLat, `<div class="pop"><h3><span class="hi" style="--c:${L.warna};color:#1a1200">${icon("gunung")}</span>Gunung ${esc(p.nama)}</h3>
+      <div class="sub"><span class="lv" style="--c:${L.warna}">Level ${L.rom} · ${L.nama}</span> ${esc(p.lokasi || where(p))}${p.elevasi ? ` · ${num(p.elevasi)} mdpl` : ""}</div>
+      ${p.erupsi || p.vona ? `<div class="flags">${p.erupsi ? `<span>Erupsi tercatat di MAGMA</span>` : ""}${p.vona ? `<span>Peringatan abu penerbangan (VONA)</span>` : ""}</div>` : ""}
+      ${p.level >= 2 ? tabsHTML([
+        lap ? { id: "l", label: "Laporan", html: `${p.periode ? `<div class="nm" style="margin-bottom:6px">${esc(p.periode)}</div>` : ""}${lap}` } : null,
+        rek ? { id: "r", label: "Rekomendasi", html: rek } : null,
+        { id: "b", ic: "berita", label: "Berita", n: bl.length, html: newsHTML(bl, `Belum ada berita tentang Gunung ${p.nama} (3 hari terakhir).`) },
+      ], buka || (lap ? "l" : undefined)) : `<div class="nm">Status Normal: tidak ada peningkatan aktivitas yang dilaporkan.</div>`}
+      <div class="src">Sumber: MAGMA Indonesia (PVMBG, Badan Geologi)${url ? ` · <a href="${esc(url)}" target="_blank" rel="noopener">laporan lengkap</a>` : ""}</div></div>`);
+  }
+  function focusVolcano(f, buka) {
+    if (!state.mapReady) return;
+    closeSheet(); clearRings();
+    const [lng, lat] = f.geometry.coordinates;
+    const down = isMobile() ? 0 : Math.round(window.innerHeight * 0.22);
+    terbangKe([lng, lat], Math.max(map.getZoom(), 9), down, { speed: 1.4, ...(REDUCED ? { duration: 0 } : {}) });
+    setTimeout(() => showVolcano(f, { lng, lat }, buka), 0);
+  }
+
   // ---------- wilayah ----------
   function regionStats(id) {
     const c = (x) => x.features.filter((f) => f.properties.wilayah_id === id).length;
     return { api: c(state.data.titik_panas), gempa: c(state.data.gempa), lapor: c(state.data.laporan) };
   }
   function showRegionPopup(p, lngLat) {
-    const s = regionStats(p.id);
-    const reps = state.data.laporan.features.filter((f) => f.properties.wilayah_id === p.id);
-    // berita kejadian di wilayah ini: laporan warga + karhutla + gempa yang pusatnya di sini
+    ringkasWilayah({ ids: new Set([p.id]), judul: p.nama, sub: p.provinsi }, lngLat);
+  }
+
+  // Semua kejadian di sekumpulan kabupaten/kota (satu kab/kota, atau satu provinsi)
+  function kejadianDi(ids) {
+    const d = state.data, di = (f) => ids.has(f.properties.wilayah_id);
+    return {
+      gempa: d.gempa.features.filter(di),
+      api: d.titik_panas.features.filter(di),
+      waspada: d.peringatan.features.filter((f) => (f.properties.wilayah_ids || []).some((x) => ids.has(x))),
+      bnpb: d.banjir_bnpb.features.filter(di),
+      gunung: (d.gunung_api?.features || []).filter(di),
+      lapor: d.laporan.features.filter(di),
+    };
+  }
+  const jumlahKejadian = (k) => k.gempa.length + (k.api.length ? 1 : 0) + k.waspada.length + k.bnpb.length
+    + k.gunung.filter((f) => f.properties.level >= 2).length + k.lapor.length;
+
+  function ringkasWilayah(w, lngLat) {
+    const k = kejadianDi(w.ids), aksi = [];
+    const baris = (c, ic, judul, sub, go) => {
+      aksi.push(go);
+      return `<button class="ev" data-a="${aksi.length - 1}"><span class="ev-ic" style="--c:${c}">${ic}</span>
+        <span class="ev-t"><b>${esc(judul)}</b><span>${esc(sub)}</span></span></button>`;
+    };
+    const rows = [];
+    for (const f of k.waspada) {
+      const p = f.properties;
+      rows.push(baris(WARNA_WASPADA, icon("banjir"), "Waspada hujan lebat (BMKG)", `hingga ${jamWIB(p.berakhir)} · ${sisa(p.berakhir)}`, () => focusWarning(f)));
+    }
+    for (const f of k.gunung.filter((x) => x.properties.level >= 2)) {
+      const p = f.properties, L = LEVEL_GUNUNG[p.level];
+      rows.push(baris(L.warna, icon("gunung"), `Gunung ${p.nama} · ${L.nama}`, `Level ${L.rom} · MAGMA Indonesia`, () => focusVolcano(f)));
+    }
+    for (const f of k.bnpb) {
+      const p = f.properties;
+      rows.push(baris(WARNA_BNPB, icon("banjir"), `Banjir · ${p.kabupaten || p.kabupaten_bnpb}`,
+        `${tglID(p.tanggal)} · data resmi BNPB${p.rumah_terendam ? ` · ${num(p.rumah_terendam)} rumah terendam` : ""}`,
+        () => focusBnpb(p.wilayah_id, f)));
+    }
+    for (const f of [...k.gempa].sort((a, b) => b.properties.waktu.localeCompare(a.properties.waktu))) {
+      const p = f.properties;
+      rows.push(baris("#ff4d4f", icon("gempa"), `Gempa M${p.magnitudo}`, `${ago(p.waktu)} · ${p.lokasi || where(p)}`, () => focusFeature("gempa", f)));
+    }
+    if (k.api.length) {
+      const per = new Set(k.api.map((f) => f.properties.wilayah_id));
+      rows.push(baris("#ff6a1a", icon("api"), `${num(k.api.length)} titik panas (24 jam)`,
+        per.size > 1 ? `di ${num(per.size)} kabupaten/kota` : (k.api[0].properties.kabupaten || ""), () => {
+          if (per.size === 1) return focusRegion([...per][0]);
+          const pts = k.api.map((f) => f.geometry.coordinates);
+          map.fitBounds(boundsOf(pts), { padding: viewPadding(), maxZoom: 9.5, duration: REDUCED ? 0 : 1000 });
+        }));
+    }
+    for (const f of k.lapor) {
+      const p = f.properties;
+      rows.push(baris(jWarna(p.jenis), jIcon(p.jenis), `Laporan ${p.jenis}`, `${ago(p.waktu)} · ${p.kabupaten || ""}`, () => focusFeature("laporan", f)));
+    }
+    // berita dari semua kejadian di wilayah ini
     const seen = new Set();
     const news = [
-      ...reps.flatMap((f) => state.berita[f.properties.id]?.berita || []),
-      ...beritaApi(p.id),
-      ...state.data.gempa.features.filter((f) => f.properties.wilayah_id === p.id).flatMap((f) => beritaGempa(f.properties)),
+      ...k.lapor.flatMap((f) => state.berita[f.properties.id]?.berita || []),
+      ...[...new Set(k.api.map((f) => f.properties.wilayah_id))].flatMap((id) => beritaApi(id)),
+      ...k.gempa.flatMap((f) => beritaGempa(f.properties)),
+      ...k.gunung.flatMap((f) => beritaGunung(f.properties)),
+      ...k.bnpb.flatMap((f) => beritaBnpb(f.properties.id)),
+      ...[...new Set(k.waspada.map((f) => f.properties.provinsi))].flatMap((p) => beritaBmkg(p)),
     ].filter((b) => !seen.has(b.judul) && seen.add(b.judul))
-      .sort((a, b) => b.terbit.localeCompare(a.terbit)).slice(0, 8);
-    popupAt(lngLat, `<div class="pop"><h3>${esc(p.nama)}</h3><div class="sub">${esc(p.provinsi)}</div>
-      <div class="grid3"><div><b>${num(s.api)}</b><span>titik panas<br>24 jam</span></div>
-      <div><b>${num(s.gempa)}</b><span>gempa<br>7 hari</span></div>
-      <div><b>${num(s.lapor)}</b><span>laporan<br>7 hari</span></div></div>
-      ${tabsHTML([{ id: "b", ic: "berita", label: "Berita kejadian", n: news.length,
-        html: newsHTML(news, `Belum ada berita kejadian di ${p.nama}.`) }])}</div>`);
+      .sort((a, b) => b.terbit.localeCompare(a.terbit)).slice(0, 10);
+    const stat = (n, label) => `<div${n ? "" : ' class="nol"'}><b>${num(n)}</b><span>${label}</span></div>`;
+    popupAt(lngLat, `<div class="pop"><h3>${esc(w.judul)}</h3><div class="sub">${esc(w.sub || "")}</div>
+      <div class="grid5">${stat(k.gempa.length, "gempa<br>7 hari")}${stat(k.api.length, "titik panas<br>24 jam")}
+        ${stat(k.waspada.length + k.bnpb.length, "banjir<br>aktif")}${stat(k.gunung.filter((f) => f.properties.level >= 2).length, "gunung<br>waspada")}
+        ${stat(k.lapor.length, "laporan<br>7 hari")}</div>
+      ${tabsHTML([
+        rows.length ? { id: "k", label: "Kejadian", n: rows.length, html: `<div class="evs">${rows.join("")}</div>` } : null,
+        { id: "b", ic: "berita", label: "Berita", n: news.length, html: newsHTML(news, `Belum ada berita kejadian di ${w.judul}.`) },
+      ], w.buka && rows.length ? "k" : undefined)}
+      ${rows.length ? "" : `<div class="nm" style="margin-top:8px">Tidak ada kejadian yang tercatat di wilayah ini saat ini.</div>`}</div>`,
+      () => sorotWilayah(null));
+    state.popup.getElement().querySelectorAll(".ev").forEach((b) => b.addEventListener("click", () => aksi[+b.dataset.a]()));
+    sorotWilayah(w.ids);
+  }
+  // Garis tepi wilayah yang sedang dilihat
+  function sorotWilayah(ids) {
+    state.sorot = ids ? [...ids] : null;
+    if (!state.mapReady || !map.getLayer("sorot-line")) return;
+    map.setFilter("sorot-line", ["in", ["get", "id"], ["literal", state.sorot || []]]);
+  }
+
+  // ---------- pencarian kabupaten/kota & provinsi ----------
+  const normCari = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/\b(kab\.?|kabupaten|kota adm\.?|kota|provinsi|prov\.?)\s+/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  async function indeksWilayah() {
+    if (state.indeks) return state.indeks;
+    const geo = await fetch(`${DATA}wilayah.geojson`).then((r) => r.json());
+    const kab = [], prov = new Map();
+    for (const f of geo.features) {
+      const p = f.properties, g = f.geometry;
+      const polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
+      let b = [180, 90, -180, -90];
+      for (const poly of polys) for (const [x, y] of poly[0]) b = [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)];
+      const tipe = /^Kota\b/.test(p.nama) ? "kota" : "kab";
+      kab.push({ tipe, id: p.id, nama: p.nama, provinsi: p.provinsi, n: normCari(p.nama), b });
+      const pv = prov.get(p.provinsi) || { tipe: "prov", nama: p.provinsi, n: normCari(p.provinsi), ids: [], b: [180, 90, -180, -90] };
+      pv.ids.push(p.id);
+      pv.b = [Math.min(pv.b[0], b[0]), Math.min(pv.b[1], b[1]), Math.max(pv.b[2], b[2]), Math.max(pv.b[3], b[3])];
+      prov.set(p.provinsi, pv);
+    }
+    state.indeks = [...prov.values(), ...kab];
+    return state.indeks;
+  }
+  function cariWilayah(q) {
+    const raw = q.toLowerCase(), n = normCari(q);
+    if (!n) return [];
+    const mau = /\bkota\b/.test(raw) ? "kota" : /\bkab/.test(raw) ? "kab" : /\bprov/.test(raw) ? "prov" : null;
+    const hasil = [];
+    for (const e of state.indeks) {
+      let s = e.n === n ? 100 : e.n.startsWith(n) ? 80 : e.n.split(" ").some((w) => w.startsWith(n)) ? 60 : e.n.includes(n) ? 40 : 0;
+      if (!s) continue;
+      if (mau && e.tipe === mau) s += 15;
+      if (e.tipe === "prov") s += 3;
+      hasil.push([s, e]);
+    }
+    return hasil.sort((a, b) => b[0] - a[0] || a[1].nama.length - b[1].nama.length).slice(0, 8).map((x) => x[1]);
+  }
+  function pilihWilayah(e) {
+    tutupCari();
+    if (state.mode) setMode(null);
+    const ids = new Set(e.tipe === "prov" ? e.ids : [e.id]);
+    const bb = [[e.b[0], e.b[1]], [e.b[2], e.b[3]]];
+    clearRings();
+    map.fitBounds(bb, { padding: viewPadding(), maxZoom: e.tipe === "prov" ? 8 : 10, duration: REDUCED ? 0 : 1100 });
+    const tengah = { lng: (e.b[0] + e.b[2]) / 2, lat: (e.b[1] + e.b[3]) / 2 };
+    const sub = e.tipe === "prov" ? `Provinsi · ${num(e.ids.length)} kabupaten/kota` : `${e.tipe === "kota" ? "Kota" : "Kabupaten"} · ${e.provinsi}`;
+    map.once("moveend", () => ringkasWilayah({ ids, judul: e.nama, sub, buka: true }, tengah));
+  }
+  function renderHasilCari() {
+    const box = $("#cari-hasil"), q = $("#cari-input").value;
+    if (!state.indeks) { box.innerHTML = `<div class="cari-kosong">Memuat daftar wilayah…</div>`; return; }
+    const hasil = cariWilayah(q);
+    state.cariHasil = hasil; state.cariAktif = 0;
+    if (!q.trim()) { box.innerHTML = `<div class="cari-kosong">Contoh: Bandung, Kab. Bogor, Jawa Timur</div>`; return; }
+    if (!hasil.length) { box.innerHTML = `<div class="cari-kosong">Wilayah "${esc(q)}" tidak ditemukan.</div>`; return; }
+    box.innerHTML = hasil.map((e, i) => {
+      const n = state.data.gempa ? jumlahKejadian(kejadianDi(new Set(e.tipe === "prov" ? e.ids : [e.id]))) : 0;
+      const jenis = e.tipe === "prov" ? "Provinsi" : `${e.tipe === "kota" ? "Kota" : "Kabupaten"} · ${e.provinsi}`;
+      return `<button class="cari-item" role="option" data-i="${i}" aria-selected="${i === 0}">
+        <span class="ci-t"><b>${esc(e.nama)}</b><span>${esc(jenis)}</span></span>
+        <span class="ci-n${n ? " ada" : ""}">${num(n)} kejadian</span></button>`;
+    }).join("");
+    box.querySelectorAll(".cari-item").forEach((b) => b.addEventListener("click", () => pilihWilayah(hasil[+b.dataset.i])));
+  }
+  function bukaCari() {
+    $("#cari").hidden = false;
+    $("#cari-btn").setAttribute("aria-expanded", "true");
+    const inp = $("#cari-input");
+    inp.focus(); inp.select();
+    renderHasilCari();
+    indeksWilayah().then(renderHasilCari).catch(() => { $("#cari-hasil").innerHTML = `<div class="cari-kosong">Daftar wilayah gagal dimuat.</div>`; });
+  }
+  function tutupCari() {
+    $("#cari").hidden = true;
+    $("#cari-btn").setAttribute("aria-expanded", "false");
+  }
+  function wireCari() {
+    $("#cari-btn").addEventListener("click", () => ($("#cari").hidden ? bukaCari() : tutupCari()));
+    $("#cari-tutup").addEventListener("click", tutupCari);
+    const inp = $("#cari-input");
+    inp.addEventListener("input", renderHasilCari);
+    inp.addEventListener("keydown", (e) => {
+      const n = state.cariHasil?.length || 0;
+      if (e.key === "Escape") { e.stopPropagation(); tutupCari(); return; }
+      if (!n) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        state.cariAktif = (state.cariAktif + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+        document.querySelectorAll(".cari-item").forEach((b, i) => b.setAttribute("aria-selected", String(i === state.cariAktif)));
+      } else if (e.key === "Enter") { e.preventDefault(); pilihWilayah(state.cariHasil[state.cariAktif]); }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "/" && document.activeElement?.tagName !== "INPUT") { e.preventDefault(); bukaCari(); }
+    });
   }
 
   // flyTo TANPA opsi `padding`: di MapLibre padding dari flyTo/easeTo tersimpan permanen di kamera dan

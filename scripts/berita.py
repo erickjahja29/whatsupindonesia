@@ -23,7 +23,7 @@ DOMAIN_RESMI = [
     "sindonews.com", "suara.com", "cnbcindonesia.com", "mediaindonesia.com", "beritasatu.com",
     "idntimes.com", "merdeka.com", "inews.id", "metrotvnews.com", "rri.co.id", "tvrinews.com",
     "jawapos.com", "bisnis.com", "katadata.co.id", "viva.co.id", "medcom.id", "pikiran-rakyat.com",
-    "tvonenews.com", "kompasiana.com", "beritajakarta.id", ".go.id",
+    "tvonenews.com", "kompasiana.com", "beritajakarta.id", "jpnn.com", "voi.id", "bbc.com", "bbc.co.uk", ".go.id",
 ]
 DOMAIN_RESMI = [d for d in DOMAIN_RESMI if d != "kompasiana.com"]  # blog warga, bukan redaksi
 
@@ -174,6 +174,15 @@ RSS_MEDIA = [
     "https://www.republika.co.id/rss",
     "https://sindikasi.okezone.com/index.php/rss/1/RSS2.0",
     "https://mediaindonesia.com/feed",
+    "https://rri.co.id/rss",
+    "https://feed.liputan6.com/rss/news",
+    "https://www.jpnn.com/rss",
+    "https://voi.id/rss",
+    "https://feeds.bbci.co.uk/indonesia/rss.xml",
+    # media daerah: kejadian di luar Jawa sering hanya diberitakan kanal regional
+    *[f"https://{r}.antaranews.com/rss/terkini.xml"
+      for r in ("aceh", "sumut", "jabar", "jateng", "jatim", "kaltim", "makassar", "papua", "bali")],
+    *[f"https://www.detik.com/{r}/rss" for r in ("jabar", "jateng", "jatim", "jogja", "bali", "sulsel", "sumut")],
 ]
 ARSIP = []          # diisi fetch_data sebelum pencarian
 GOOGLE_OFF = False  # True setelah Google News membatasi (429) di run ini
@@ -190,7 +199,8 @@ def _nama_media(judul_kanal, url):
     host = urllib.parse.urlparse(url).netloc.lower()
     peta = {"antaranews": "ANTARA News", "cnnindonesia": "CNN Indonesia", "detik": "detikNews", "tempo": "Tempo.co",
             "cnbcindonesia": "CNBC Indonesia", "republika": "Republika", "okezone": "Okezone",
-            "mediaindonesia": "Media Indonesia"}
+            "mediaindonesia": "Media Indonesia", "rri.co.id": "RRI", "liputan6": "Liputan6", "jpnn": "JPNN",
+            "voi.id": "VOI", "bbc": "BBC News Indonesia"}
     for k, v in peta.items():
         if k in host:
             return v
@@ -224,7 +234,7 @@ def perbarui_arsip(get, lama, sekarang):
                                "terbit": terbit.strftime("%Y-%m-%dT%H:%M:%SZ")}
     batas = (sekarang - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
     hasil = sorted((x for x in items.values() if x["terbit"] >= batas), key=lambda x: x["terbit"], reverse=True)
-    return hasil[:4000], ok
+    return hasil[:8000], ok
 
 
 _MAG_RE = re.compile(r"(?:\bm\s?|magnitud[eo]\s?|bermagnitudo\s?|gempa\s)(\d{1,2}[.,]\d)\b")
@@ -362,3 +372,18 @@ def berita_karhutla(get, kab, t0, t1):
         return []
     return cari(get, [f'(karhutla OR "kebakaran hutan" OR "kebakaran lahan" OR "lahan terbakar") "{kab}"'],
                 AKAR_KARHUTLA, [kab], t0, t1)
+
+
+AKAR_GUNUNG = ("erupsi", "meletus", "letusan", "awan panas", "guguran", "abu vulkanik", "status gunung",
+               "level iii", "level iv", "siaga", "awas", "lahar", "gunung")
+
+
+def berita_gunung(get, nama, t0, t1):
+    """Berita aktivitas satu gunung api: judul harus memuat nama gunungnya."""
+    if not nama:
+        return []
+    tempat = [f"gunung {nama}", f"gn {nama}", f"gn. {nama}"]
+    if len(nama) >= 6:  # nama pendek (Ibu, Iya, Awu) terlalu umum bila berdiri sendiri
+        tempat.append(nama)
+    return cari(get, [f'"{nama}" (erupsi OR "gunung {nama}" OR status OR "awan panas")'],
+                AKAR_GUNUNG, tempat, t0, t1)

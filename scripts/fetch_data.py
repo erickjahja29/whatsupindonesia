@@ -17,12 +17,13 @@ import re
 import sys
 import traceback
 import urllib.request
+from html import unescape
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from geo import RegionIndex  # noqa: E402
-from berita import (berita_untuk_laporan, berita_gempa, berita_banjir, berita_karhutla,  # noqa: E402
+from berita import (berita_untuk_laporan, berita_gempa, berita_banjir, berita_karhutla, berita_gunung,  # noqa: E402
                     _short_kab, Dibatasi)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -363,6 +364,191 @@ def fetch_flood_bnpb(regions):
     return fc(feats), {}
 
 
+# --------------------------------------------------------------- gunung api
+MAGMA = "https://magma.esdm.go.id/"
+MAGMA_LEVEL = "https://magma.esdm.go.id/v1/gunung-api/tingkat-aktivitas"
+STATUS_GUNUNG = {1: "Normal", 2: "Waspada", 3: "Siaga", 4: "Awas"}
+LAPORAN_KEYS = ("periode", "visual", "lainnya", "kegempaan", "rekomendasi")
+
+
+def _json_array_after(text, marker):
+    """Ambil array JSON yang dimulai setelah `marker` (mis. 'var markersGunungApi')."""
+    i = text.find(marker)
+    if i < 0:
+        raise ValueError(f"penanda {marker!r} tidak ditemukan")
+    s = text.find("[", i)
+    d = 0
+    for j in range(s, len(text)):
+        if text[j] == "[":
+            d += 1
+        elif text[j] == "]":
+            d -= 1
+            if d == 0:
+                return json.loads(text[s:j + 1])
+    raise ValueError("array tidak tertutup")
+
+
+def _teks(html):
+    t = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.S)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return re.sub(r"\s+", " ", unescape(t)).strip()
+
+
+def _antara(t, awal, akhir_list, maks=420):
+    """Teks di antara judul bagian `awal` dan judul bagian berikutnya."""
+    i = t.find(awal)
+    if i < 0:
+        return None
+    i += len(awal)
+    j = min([k for k in (t.find(a, i) for a in akhir_list) if k > 0] or [len(t)])
+    v = t[i:j].strip(" :.-")
+    if len(v) > maks:
+        v = v[:maks].rsplit(" ", 1)[0] + "…"
+    return v or None
+
+
+def _laporan_gunung(url):
+    t = _teks(get(url, timeout=40).decode("utf-8", "replace"))
+    periode = re.search(r"periode ([0-9:]+ - [0-9:]+ W(?:IB|ITA|IT))", t)
+    tanggal = re.search(r"Laporan Aktivitas [^,]+, (\w+ - \d{1,2} \w+ \d{4})", t)
+    rek = _antara(t, "Rekomendasi", ["Laporan Aktivitas Lainnya", "Tweet", "Copyright", "©"], maks=1600) or ""
+    poin = [x.strip() for x in re.split(r"\s(?=\d{1,2}\.\s)", " " + rek) if x.strip()]
+    poin = [re.sub(r"^\d{1,2}\.\s*", "", x) for x in poin]
+    poin = [(x[:320].rsplit(" ", 1)[0] + "…") if len(x) > 320 else x
+            for x in poin if len(x) > 12 and x.lower() != "rekomendasi"][:3]
+    waktu = " · ".join(x for x in ((tanggal.group(1).replace(" - ", ", ") if tanggal else None),
+                                   (periode.group(1) if periode else None)) if x)
+    return {
+        "periode": waktu or None,
+        "visual": _antara(t, "Pengamatan Visual", ["Keterangan Lainnya", "Klimatologi", "Pengamatan Kegempaan"]),
+        "lainnya": None if (lain := _antara(t, "Keterangan Lainnya", ["Klimatologi", "Pengamatan Kegempaan"],
+                                              maks=300)) in (None, "Nihil", "nihil", "-") else lain,
+        "kegempaan": _antara(t, "Pengamatan Kegempaan", ["Rekomendasi"], maks=360),
+        "rekomendasi": poin,
+    }
+
+
+def fetch_volcanoes(regions):
+    """Tingkat aktivitas gunung api dari MAGMA Indonesia (Badan Geologi/PVMBG). Laporan terbaru dibaca
+    untuk gunung berstatus Waspada ke atas; dipakai ulang selama nomor laporannya belum berganti."""
+    home = get(MAGMA, timeout=60).decode("utf-8", "replace")
+    gunung = _json_array_after(home, "var markersGunungApi")
+    level_html = get(MAGMA_LEVEL, timeout=60).decode("utf-8", "replace")
+    tautan = {}
+    pola = r'<td>\s*([^<]+?)\s+-\s+[^<]*?<a href="(https://magma\.esdm\.go\.id/v1/gunung-api/laporan/\d+\?signature=[0-9a-f]+)"'
+    for nama, url in re.findall(pola, level_html):
+        tautan[nama.strip().lower()] = unescape(url)
+    lama = {f["properties"]["id"]: f["properties"] for f in load_previous("gunung_api.geojson").get("features", [])}
+    feats, dibaca, gagal = [], 0, 0
+    for g in gunung:
+        lon, lat = g.get("ga_lon_gapi"), g.get("ga_lat_gapi")
+        if lon is None or lat is None:
+            continue
+        lv = int(g.get("ga_status") or 1)
+        nama = (g.get("ga_nama_gapi") or "").strip()
+        url = tautan.get(nama.lower())
+        lid = re.search(r"laporan/(\d+)", url).group(1) if url else None
+        props = {
+            "id": g.get("ga_code") or nama, "nama": nama, "level": lv, "status": STATUS_GUNUNG.get(lv, "?"),
+            "elevasi": g.get("ga_elev_gapi"), "erupsi": bool(g.get("erupt_icon")), "vona": bool(g.get("has_vona")),
+            "lokasi": ", ".join(x for x in (g.get("ga_kab_gapi"), g.get("ga_prov_gapi")) if x),
+            "tautan": url, "laporan_id": lid,
+            **wilayah_props(regions.locate(lon, lat)),
+        }
+        if lv >= 2 and url:
+            old = lama.get(props["id"])
+            if old and old.get("laporan_id") == lid and old.get("periode"):
+                props.update({k: old.get(k) for k in LAPORAN_KEYS})
+            else:
+                try:
+                    props.update(_laporan_gunung(url))
+                    dibaca += 1
+                except Exception as e:
+                    gagal += 1
+                    print("    laporan gunung gagal:", nama, e)
+                    if old:
+                        props.update({k: old.get(k) for k in LAPORAN_KEYS})
+        feats.append(point(lon, lat, props))
+    feats.sort(key=lambda f: (-f["properties"]["level"], f["properties"]["nama"]))
+    return fc(feats), {"waspada_ke_atas": sum(1 for f in feats if f["properties"]["level"] >= 2),
+                       "laporan_dibaca": dibaca, "laporan_gagal": gagal}
+
+
+# ------------------------------------------------- area banjir (PetaBencana)
+PB_FLOODS = "https://data.petabencana.id/floods?minimum_state=1&geoformat=geojson"
+TINGGI_BANJIR = {1: "hati-hati", 2: "10–70 cm", 3: "71–150 cm", 4: "lebih dari 150 cm"}
+
+
+def fetch_flood_areas(regions):
+    """Area (RT/RW) yang ditandai tergenang di PetaBencana.id, hanya yang diperbarui ≤ 48 jam terakhir."""
+    data = json.loads(get(PB_FLOODS, timeout=60))
+    feats, lewat = [], 0
+    for f in (data.get("result") or {}).get("features", []):
+        p = f.get("properties") or {}
+        try:
+            t = datetime.fromisoformat(p["last_updated"].replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if NOW - t > timedelta(hours=48):
+            lewat += 1
+            continue
+        a = p.get("attributes") or {}
+        lv = int(p.get("state") or 1)
+        kel = (a.get("Kelurahan/Village") or p.get("parent_name") or "").title()
+        kec = (a.get("Kecamatan/Subdistrict") or p.get("city_name") or "").title()
+        feats.append({"type": "Feature", "geometry": f["geometry"], "properties": {
+            "id": str(p.get("area_id") or p.get("geom_id")), "level": lv, "tinggi": TINGGI_BANJIR.get(lv, "?"),
+            "nama": " · ".join(x for x in (p.get("area_name"), kel, kec) if x),
+            "kota": (a.get("District") or "").title() or None, "waktu": iso(t),
+        }})
+    return fc(feats), {"kedaluwarsa_dibuang": lewat}
+
+
+# ------------------------------------------------------------------- angin
+OPEN_METEO = ("https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+              "&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m&forecast_hours=12"
+              "&timezone=GMT&wind_speed_unit=kmh")
+ANGIN_LANGKAH = 1.5   # jarak grid (derajat), ~165 km
+ANGIN_ULANG = timedelta(hours=2)  # model cuaca diperbarui per jam; hemat kuota gratis Open-Meteo
+
+
+def fetch_wind(regions):
+    """Arah & kecepatan angin 10 m (prakiraan per jam, 12 jam ke depan) di grid seluruh Indonesia,
+    dari Open-Meteo (gratis, tanpa API key, CC BY 4.0). Diambil ulang paling cepat tiap 2 jam."""
+    lama = load_previous("angin.json")
+    if lama.get("diambil"):
+        umur = NOW - datetime.fromisoformat(lama["diambil"].replace("Z", "+00:00"))
+        jam_terakhir = datetime.fromisoformat(lama["jam"][-1] + "+00:00") if lama.get("jam") else NOW
+        if umur < ANGIN_ULANG and jam_terakhir > NOW + timedelta(hours=6):
+            return lama, {"dipakai_ulang": True, "titik": len(lama.get("titik", []))}
+    grid = []
+    lat = BBOX[1] + 0.5
+    while lat <= BBOX[3]:
+        lon = BBOX[0] + 0.5
+        while lon <= BBOX[2]:
+            grid.append((round(lon, 2), round(lat, 2)))
+            lon += ANGIN_LANGKAH
+        lat += ANGIN_LANGKAH
+    titik, jam = [], None
+    for i in range(0, len(grid), 100):
+        chunk = grid[i:i + 100]
+        url = OPEN_METEO.format(lat=",".join(str(c[1]) for c in chunk), lon=",".join(str(c[0]) for c in chunk))
+        data = json.loads(get(url, timeout=60))
+        if isinstance(data, dict):
+            data = [data]
+        for (lon, lat), d in zip(chunk, data):
+            h = d.get("hourly") or {}
+            jam = jam or h.get("time")
+            spd, arah, gust = h.get("wind_speed_10m"), h.get("wind_direction_10m"), h.get("wind_gusts_10m")
+            if not spd or not arah:
+                continue
+            titik.append([lon, lat, [round(x or 0) for x in spd], [round(x or 0) for x in arah],
+                          [round(x or 0) for x in (gust or [])]])
+    if not titik:
+        raise ValueError("Open-Meteo tidak mengembalikan data angin")
+    return {"diambil": iso(NOW), "sumber": "Open-Meteo", "jam": jam, "titik": titik}, {"dipakai_ulang": False, "titik": len(titik)}
+
+
 # ------------------------------------------------- berita terkait laporan
 def load_previous(name):
     """Data run sebelumnya: file lokal, atau (di GitHub Actions) salinan dari situs yang sudah terbit."""
@@ -507,6 +693,24 @@ def fetch_event_news():
             out[key] = cache[key]
     (LIVE / "berita_api.json").write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     info["karhutla"] = {"dicari": n, "dengan_berita": sum(1 for v in out.values() if v["berita"])}
+
+    # --- gunung api: gunung berstatus Waspada ke atas, berita 3 hari terakhir
+    cache, out, n = load_previous("berita_gunung.json"), {}, 0
+    for f in load("gunung_api.geojson")["features"]:
+        p = f["properties"]
+        if p.get("level", 1) < 2:
+            continue
+        key = f"{p['id']}|{hari}"
+        if _cek_cache(cache, key, timedelta(0)) and n < 14:
+            n += 1
+            r = coba(berita_gunung, get, p["nama"], NOW - timedelta(days=3), NOW)
+            if r is not None:
+                out[key] = {"diperiksa": iso(NOW), "berita": r}
+                continue
+        if key in cache:
+            out[key] = cache[key]
+    (LIVE / "berita_gunung.json").write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    info["gunung_api"] = {"dicari": n, "dengan_berita": sum(1 for v in out.values() if v["berita"])}
     return info
 
 
@@ -519,7 +723,8 @@ def main():
     meta = {"diperbarui": iso(NOW), "lapisan": {}}
 
     for key, fn in (("gempa", fetch_quakes), ("titik_panas", fetch_hotspots), ("laporan", fetch_reports),
-                    ("peringatan", fetch_flood_warnings), ("banjir_bnpb", fetch_flood_bnpb)):
+                    ("peringatan", fetch_flood_warnings), ("banjir_bnpb", fetch_flood_bnpb),
+                    ("gunung_api", fetch_volcanoes), ("banjir_area", fetch_flood_areas)):
         print(f"- {key} ...")
         try:
             geo, info = fn(regions)
@@ -533,6 +738,17 @@ def main():
             meta["lapisan"][key] = {**prev, "ok": False, "galat": str(e)[:200]}
             if not (LIVE / f"{key}.geojson").exists():
                 (LIVE / f"{key}.geojson").write_text(json.dumps(fc([])), encoding="utf-8")
+
+    print("- angin ...")
+    try:
+        angin, info = fetch_wind(None)
+        (LIVE / "angin.json").write_text(json.dumps(angin, separators=(",", ":")), encoding="utf-8")
+        meta["lapisan"]["angin"] = {"ok": True, "jumlah": len(angin["titik"]), "diambil": angin["diambil"], **info}
+        print(f"  {info}")
+    except Exception as e:
+        traceback.print_exc()
+        prev = old_meta.get("lapisan", {}).get("angin", {})
+        meta["lapisan"]["angin"] = {**prev, "ok": False, "galat": str(e)[:200]}
 
     print("- berita terkait laporan ...")
     try:
