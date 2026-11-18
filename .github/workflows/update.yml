@@ -2,7 +2,7 @@ name: Perbarui data & terbitkan situs
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # tiap 15 menit (GitHub bisa menunda beberapa menit)
+    - cron: "7,22,37,52 * * * *"   # tiap 15 menit, sengaja di menit sepi (GitHub sering menunda/melewatkan jadwal di :00/:15/:30/:45)
   push:
     branches: [main]
   workflow_dispatch:
