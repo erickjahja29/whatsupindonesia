@@ -51,7 +51,7 @@
   const ROMAWI = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9 };
 
   const MODES = {
-    gempa: { title: "Gempa", sub: "7 hari terakhir · BMKG (cadangan USGS)", c: "#ff4d4f", ic: "gempa", layers: ["gempa", "gempa-label"] },
+    gempa: { title: "Gempa", sub: "7 hari terakhir · BMKG, dicek tiap menit", c: "#ff4d4f", ic: "gempa", layers: ["gempa", "gempa-label"] },
     titik_panas: { title: "Titik panas", sub: "24 jam terakhir · satelit NASA FIRMS", c: "#ff6a1a", ic: "api", layers: ["titik_panas", "titik_panas-glow"] },
     laporan: { title: "Laporan warga", sub: "7 hari terakhir · PetaBencana.id + berita media", c: "#3ea6ff", ic: "lapor", layers: ["laporan"] },
     // only = lapisan yang hanya tampil di mode ini (tidak di beranda)
@@ -481,6 +481,7 @@
         getJSON("live/ispu.geojson").catch(() => kosong),
       ]);
       for (const f of gempa.features) f.properties.lokasi = rapiLokasi(f.properties.lokasi);
+      gabungGempaRT(gempa);   // file statis bisa lebih lama dari data BMKG langsung: jangan sampai gempa baru hilang
       state.beritaGempa = bGempa;
       state.beritaBanjir = bBanjir;
       state.beritaApi = bApi;
@@ -516,6 +517,124 @@
     } catch (e) {
       console.error(e);
       $("#updated").textContent = "Gagal memuat data. Coba muat ulang halaman.";
+    }
+  }
+
+  // ---------- gempa realtime: langsung dari BMKG (mengizinkan akses dari browser, diperbarui tiap 60 detik) ----------
+  const BMKG_TEWS = "https://data.bmkg.go.id/DataMKG/TEWS/";
+  const GEMPA_RT_MS = 60 * 1000;
+  const kunciGempa = (waktu, [lng, lat]) => `${waktu.slice(0, 16)}|${lat.toFixed(2)}|${lng.toFixed(2)}`;
+  const angkaBMKG = (t) => { const m = String(t ?? "").match(/-?\d+(?:[.,]\d+)?/); return m ? parseFloat(m[0].replace(",", ".")) : null; };
+  async function ambilBMKG(nama) {
+    const r = await fetch(`${BMKG_TEWS}${nama}?t=${Math.floor(Date.now() / 60000)}`, { cache: "no-store" });
+    if (!r.ok) throw new Error(`${nama}: ${r.status}`);
+    const g = (await r.json()).Infogempa.gempa;
+    return Array.isArray(g) ? g : [g];
+  }
+  // Poligon kabupaten/kota untuk mengisi wilayah gempa baru (sama seperti skrip Python)
+  async function petaWilayah() {
+    if (!state.wilayahPoly) {
+      const geo = await fetch(`${DATA}wilayah.geojson`).then((r) => r.json());
+      state.wilayahPoly = geo.features.map((f) => {
+        const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates;
+        let b = [180, 90, -180, -90];
+        for (const poly of polys) for (const [x, y] of poly[0]) b = [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)];
+        return { b, polys, p: f.properties };
+      });
+    }
+    return state.wilayahPoly;
+  }
+  function diDalamCincin(x, y, ring) {
+    let dalam = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) dalam = !dalam;
+    }
+    return dalam;
+  }
+  function wilayahTitik(daftar, lng, lat) {
+    for (const w of daftar) {
+      if (lng < w.b[0] || lng > w.b[2] || lat < w.b[1] || lat > w.b[3]) continue;
+      for (const poly of w.polys) {
+        if (diDalamCincin(lng, lat, poly[0]) && !poly.slice(1).some((h) => diDalamCincin(lng, lat, h))) {
+          return { wilayah_id: w.p.id, kabupaten: w.p.nama, provinsi: w.p.provinsi };
+        }
+      }
+    }
+    return { wilayah_id: null, kabupaten: null, provinsi: null };
+  }
+  // Ambil 3 daftar BMKG (M5+ terbaru, dirasakan, terkini) → fitur dengan bentuk sama seperti gempa.geojson
+  async function ambilGempaBMKG() {
+    const [terkini, dirasakan, auto] = await Promise.all(
+      ["gempaterkini.json", "gempadirasakan.json", "autogempa.json"].map((n) => ambilBMKG(n).catch(() => [])));
+    const peta = new Map();
+    for (const q of [...terkini, ...dirasakan, ...auto]) {
+      if (!q || !q.Coordinates || !q.DateTime) continue;
+      const [lat, lng] = q.Coordinates.split(",").map(Number);
+      if (!isFinite(lat) || !isFinite(lng)) continue;
+      const waktu = new Date(q.DateTime).toISOString().replace(/\.\d{3}Z$/, "Z");
+      const k = kunciGempa(waktu, [lng, lat]);
+      const ada = peta.get(k);
+      if (ada) { if (q.Dirasakan && q.Dirasakan !== "-") ada.properties.dirasakan = q.Dirasakan; continue; }
+      const mag = angkaBMKG(q.Magnitude);
+      peta.set(k, { type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: {
+        waktu, magnitudo: mag, kedalaman_km: angkaBMKG(q.Kedalaman), lokasi: rapiLokasi(q.Wilayah),
+        potensi: q.Potensi || null, dirasakan: q.Dirasakan || null,
+        shakemap: q.Shakemap ? BMKG_TEWS + q.Shakemap : null, sumber: "BMKG", id: `${waktu}|${mag}`,
+      } });
+    }
+    // wilayah hanya dihitung untuk gempa yang belum ada di data kita (file wilayah ±1 MB dimuat seperlunya)
+    const ada = new Set((state.data.gempa?.features || []).map((f) => kunciGempa(f.properties.waktu, f.geometry.coordinates)));
+    const baru = [...peta].filter(([k]) => !ada.has(k)).map(([, f]) => f);
+    if (baru.length) {
+      const wil = await petaWilayah();
+      for (const f of baru) Object.assign(f.properties, wilayahTitik(wil, ...f.geometry.coordinates));
+    }
+    return [...peta.values()];
+  }
+  // Gabungkan gempa BMKG langsung ke koleksi (tambah yang belum ada; perbarui info "dirasakan")
+  function gabungGempaRT(fc) {
+    const rt = state.gempaRT || [];
+    if (!rt.length) return false;
+    const batas = new Date(Date.now() - 7 * 24 * HOUR).toISOString();
+    const idx = new Map(fc.features.map((f) => [kunciGempa(f.properties.waktu, f.geometry.coordinates), f]));
+    let berubah = false;
+    for (const f of rt) {
+      if (f.properties.waktu < batas) continue;
+      const ada = idx.get(kunciGempa(f.properties.waktu, f.geometry.coordinates));
+      if (!ada) {
+        const baru = { ...f, properties: { ...f.properties, jam_lalu: (Date.now() - new Date(f.properties.waktu)) / HOUR } };
+        fc.features.push(baru); idx.set(kunciGempa(f.properties.waktu, f.geometry.coordinates), baru); berubah = true;
+      } else if (f.properties.dirasakan && f.properties.dirasakan !== "-" && ada.properties.dirasakan !== f.properties.dirasakan) {
+        ada.properties.dirasakan = f.properties.dirasakan; berubah = true;
+      }
+    }
+    if (berubah) fc.features.sort((a, b) => b.properties.waktu.localeCompare(a.properties.waktu));
+    return berubah;
+  }
+  async function cekGempaRealtime() {
+    if (document.hidden || !state.data.gempa || state.cekGempa) return;
+    state.cekGempa = true;
+    try {
+      const [auto] = await ambilBMKG("autogempa.json");   // file kecil: hanya gempa terakhir
+      const kunci = auto ? `${auto.DateTime}|${auto.Coordinates}|${auto.Dirasakan || ""}` : null;
+      if (!kunci || kunci === state.kunciAuto) return;
+      const pertama = !state.kunciAuto;
+      state.kunciAuto = kunci;
+      state.gempaRT = await ambilGempaBMKG();
+      if (!gabungGempaRT(state.data.gempa)) return;
+      if (!pertama) lacak("Gempa baru realtime");
+      renderDock();
+      const awal = state.firstLoad;
+      if (pertama) state.firstLoad = true;   // cek pertama hanya menyusulkan data: jangan beri label "BARU"
+      renderTicker();
+      state.firstLoad = awal;
+      if (state.mode === "gempa") { renderPanel(); applyListVisibility(); }
+      if (state.mapReady) { map.getSource("gempa").setData(state.data.gempa); renderPulses(); }
+    } catch (e) {
+      console.warn("Gempa realtime BMKG gagal dicek:", e);
+    } finally {
+      state.cekGempa = false;
     }
   }
 
@@ -1859,8 +1978,32 @@
       info.hidden = true;
     }
   }
+  // iPhone/iPad: semua browser memakai mesin Safari, tapi letak tombol "Bagikan" berbeda per aplikasi
+  function browserIOS() {
+    const ua = navigator.userAgent;
+    if (/Instagram|FBAN|FBAV|FB_IAB|Line\/|TikTok|musical_ly|Bytedance|Twitter|LinkedInApp|Snapchat/i.test(ua)) return "dalam-aplikasi";
+    if (/CriOS/.test(ua)) return "chrome";
+    if (/FxiOS/.test(ua)) return "firefox";
+    if (/EdgiOS/.test(ua)) return "edge";
+    return "safari";
+  }
+  const KOTAK_BAGIKAN = "(kotak dengan panah ke atas)";
+  function langkahPasangIOS() {
+    switch (browserIOS()) {
+      case "chrome":
+        return `Di <b>Chrome</b>: ketuk ikon <b>Bagikan</b> ${KOTAK_BAGIKAN} di kanan kolom alamat. Kalau tidak ada, buka menu <b>⋯</b> lalu <b>Bagikan</b>. Setelah itu pilih <b>Tambahkan ke Layar Utama</b>.`;
+      case "firefox":
+        return `Di <b>Firefox</b>: buka menu <b>☰</b>, pilih <b>Bagikan</b>, lalu <b>Tambahkan ke Layar Utama</b>.`;
+      case "edge":
+        return `Di <b>Edge</b>: buka menu <b>⋯</b>, pilih <b>Bagikan</b>, lalu <b>Tambahkan ke Layar Utama</b>.`;
+      case "dalam-aplikasi":
+        return `Kamu sedang membuka situs ini dari dalam aplikasi lain (mis. Instagram), yang tidak bisa memasang ke layar utama. Buka menu <b>⋯</b> lalu pilih <b>Buka di browser</b> (Safari/Chrome), kemudian tekan tombol ini lagi.`;
+      default:
+        return `Di <b>Safari</b>: ketuk tombol <b>Bagikan</b> ${KOTAK_BAGIKAN}, lalu pilih <b>Tambahkan ke Layar Utama</b>. Kalau tombolnya tidak terlihat, ketuk menu <b>⋯</b> di kolom alamat lebih dulu.`;
+    }
+  }
   function pasangAplikasi() {
-    lacak("Pasang aplikasi");
+    lacak("Pasang aplikasi", iOS() ? { perangkat: "iOS", browser: browserIOS() } : { perangkat: state.pasangPrompt ? "Android/desktop (otomatis)" : "lainnya" });
     const info = $("#pasang-info");
     if (state.pasangPrompt) {
       const ev = state.pasangPrompt;
@@ -1868,7 +2011,7 @@
       ev.prompt();
       ev.userChoice.then((r) => { if (r.outcome !== "accepted") state.pasangPrompt = ev; perbaruiPasang(); });
     } else if (iOS()) {
-      info.innerHTML = "Di <b>Safari</b>: ketuk tombol <b>Bagikan</b> (kotak dengan panah ke atas), lalu pilih <b>Tambahkan ke Layar Utama</b>.";
+      info.innerHTML = langkahPasangIOS();
       info.hidden = false;
     } else {
       info.innerHTML = "Buka menu browser (<b>⋮</b>), lalu pilih <b>Instal aplikasi</b> atau <b>Tambahkan ke layar utama</b>.";
@@ -2332,6 +2475,8 @@
   state.mode = MODES[location.hash.slice(1)] ? location.hash.slice(1) : null;
   wireUI();
   applyMode(false);
-  loadLive();
+  loadLive().then(cekGempaRealtime);
   setInterval(loadLive, REFRESH_MS);
+  setInterval(cekGempaRealtime, GEMPA_RT_MS);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) cekGempaRealtime(); });
 })();
