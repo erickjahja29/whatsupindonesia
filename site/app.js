@@ -10,6 +10,11 @@
   const TICK_MS = 6000;
   const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // Statistik pemakaian fitur (Umami, tanpa cookie). Diam saja kalau skrip analitik tidak termuat.
+  function lacak(nama, data) {
+    try { if (window.umami && typeof window.umami.track === "function") window.umami.track(nama, data); } catch { /* abaikan */ }
+  }
+
   // Ikon garis (gaya Lucide, ISC) agar tampil konsisten di semua perangkat (bukan emoji)
   const P = {
     gempa: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
@@ -185,8 +190,8 @@
         aria-label="Lapisan angin">${icon("angin")}</button>
         <button type="button" id="udara-btn" class="ctrl-udara" aria-pressed="false" title="Polusi udara (PM2.5): nyala/mati"
         aria-label="Lapisan polusi udara"><svg viewBox="0 0 24 24"><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="M16 17H7"/><path d="M17 21H9"/></svg></button>`;
-      d.querySelector("#angin-btn").addEventListener("click", () => setAngin(!state.angin));
-      d.querySelector("#udara-btn").addEventListener("click", () => setUdara(!state.udara));
+      d.querySelector("#angin-btn").addEventListener("click", () => { setAngin(!state.angin); if (state.angin) lacak("Nyalakan angin"); });
+      d.querySelector("#udara-btn").addEventListener("click", () => { setUdara(!state.udara); if (state.udara) lacak("Nyalakan kualitas udara"); });
       return d;
     }
     onRemove() { /* tidak dipakai */ }
@@ -991,8 +996,11 @@
   }
 
   function wireUI() {
-    document.querySelectorAll(".dock-btn").forEach((b) => b.addEventListener("click", () =>
-      setMode(state.mode === b.dataset.mode ? null : b.dataset.mode)));
+    document.querySelectorAll(".dock-btn").forEach((b) => b.addEventListener("click", () => {
+      const buka = state.mode !== b.dataset.mode;
+      setMode(buka ? b.dataset.mode : null);
+      if (buka) lacak("Buka lapisan", { lapisan: b.dataset.mode });
+    }));
     wireDockSwipe();
     setTimeout(geserSorotan, 1300); // setelah animasi masuk dock
     $("#back").addEventListener("click", () => setMode(null));
@@ -1118,6 +1126,10 @@
       tabs.map((t) => `<div class="ppane" data-t="${t.id}"${t.id === buka ? "" : " hidden"}>${t.html}</div>`).join("");
   }
   document.addEventListener("click", (e) => {
+    const ig = e.target.closest && e.target.closest(".ms-ig");
+    if (ig) lacak("Klik Instagram", { tagar: decodeURIComponent(ig.pathname.split("/").filter(Boolean).pop() || "") });
+  });
+  document.addEventListener("click", (e) => {
     const btn = e.target.closest && e.target.closest(".ptab");
     if (!btn) return;
     const pop = btn.closest(".pop");
@@ -1125,6 +1137,7 @@
     pop.querySelectorAll(".ptab").forEach((b) => b.setAttribute("aria-expanded", String(open && b === btn)));
     pop.querySelectorAll(".ppane").forEach((p) => { p.hidden = !(open && p.dataset.t === btn.dataset.t); });
     setTimeout(fitPopup, 30);
+    if (open) lacak("Buka tab", { tab: btn.textContent.replace(/\d[\d.,]*/g, "").trim(), popup: (pop.querySelector("h3")?.textContent || "").trim().slice(0, 40) });
   });
 
   function showPopup(layer, f, lngLat, anchor) {
@@ -1662,6 +1675,7 @@
     const v = pmDi(lng, lat, i);
     if (v == null) return;
     const Ki = kategoriPM(v);
+    lacak("Cek udara di titik", { wilayah: (wilayah && (wilayah.nama || wilayah.name)) || "" });
     const lanjut = [3, 6, 9].filter((h) => d.jam[i + h]).map((h) => {
       const w = pmDi(lng, lat, i + h), kk = w == null ? null : kategoriPM(w);
       return kk ? `<div><b style="color:${kk.warna}">${esc(kk.nama)}</b><span>${esc(jamWIB(d.jam[i + h] + ":00Z"))}</span></div>` : "";
@@ -1846,6 +1860,7 @@
     }
   }
   function pasangAplikasi() {
+    lacak("Pasang aplikasi");
     const info = $("#pasang-info");
     if (state.pasangPrompt) {
       const ev = state.pasangPrompt;
@@ -1867,7 +1882,7 @@
     $("#sumber-kembali").addEventListener("click", () => bukaSetelan(true, "setelan"));
     $("#segar-btn").addEventListener("click", segarkan);
     document.querySelectorAll(".seg-btn[data-tema]").forEach((b) => b.addEventListener("click", () => {
-      if (b.dataset.tema !== state.tema) setTema(b.dataset.tema);
+      if (b.dataset.tema !== state.tema) { setTema(b.dataset.tema); lacak("Ganti tema", { tema: b.dataset.tema }); }
     }));
     tandaiTema();
     $("#pasang-btn").addEventListener("click", pasangAplikasi);
@@ -1896,6 +1911,7 @@
         ${p.kegempaan ? `<dt>Kegempaan</dt><dd>${esc(p.kegempaan)}</dd>` : ""}</dl>` : "";
     const rek = (p.rekomendasi || []).length ? `<ol class="rek">${p.rekomendasi.map((r) => `<li>${esc(r)}</li>`).join("")}</ol>` : "";
     const daki = p.level === 0;
+    lacak("Buka gunung", { gunung: p.nama || p.id, jenis: daki ? "pendakian" : `level ${p.level}` });
     popupAt(lngLat, `<div class="pop"><h3><span class="hi" style="--c:${L.warna};color:#1a1200">${icon("gunung")}</span>${judulGunung(p)}</h3>
       <div class="sub"><span class="lv" style="--c:${L.warna}">${daki ? "Gunung pendakian" : `Level ${L.rom} · ${L.nama}`}</span> ${esc(p.lokasi || where(p))}${p.elevasi ? ` · ${num(p.elevasi)} mdpl` : ""}</div>
       ${p.erupsi || p.vona ? `<div class="flags">${p.erupsi ? `<span>Erupsi tercatat di MAGMA</span>` : ""}${p.vona ? `<span>Peringatan abu penerbangan (VONA)</span>` : ""}</div>` : ""}
@@ -2121,6 +2137,7 @@
   }
   function pilihWilayah(e) {
     tutupCari();
+    lacak("Cari", { tipe: e.tipe, hasil: e.nama || (e.f && e.f.properties.nama) || "" });
     if (e.tipe === "gunung") {   // langsung terbang ke gunung & buka tab Kondisi
       if (state.mode && state.mode !== "gunung_api") setMode(null);
       return focusVolcano(e.f, "k");
