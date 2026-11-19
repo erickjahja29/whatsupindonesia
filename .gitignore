@@ -3,3 +3,5 @@ site/data/live/
 __pycache__/
 *.pyc
 .claude/
+# Draf postingan & materi promosi (gambar/video besar) — pribadi, hanya di laptop
+pemasaran/

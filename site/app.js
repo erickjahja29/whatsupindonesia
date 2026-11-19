@@ -8,7 +8,273 @@
   const HOUR = 3600 * 1000;
   const INDONESIA = [[94.5, -11.5], [141.5, 6.5]];
   const TICK_MS = 6000;
-  const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const KARTU = /[?&]kartu\b/.test(location.search);   // ?kartu: tampilan untuk screenshot otomatis
+  const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches || KARTU;   // kartu: tanpa animasi agar screenshot tajam
+  // Bahasa: pilihan pengguna di Pengaturan; kalau belum memilih, perangkat di zona waktu Indonesia → Indonesia
+  // (banyak orang Indonesia memakai HP berbahasa Inggris), selain itu ikut bahasa browser.
+  const BAHASA = (() => {
+    let b = null;
+    try { b = localStorage.getItem("wui-bahasa"); } catch { /* mode privat */ }
+    if (b === "id" || b === "en") return b;
+    let zona = "";
+    try { zona = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { /* abaikan */ }
+    if (/^Asia\/(Jakarta|Pontianak|Makassar|Jayapura)$/.test(zona)) return "id";
+    return /^(id|ms)\b/i.test(navigator.language || "") ? "id" : "en";
+  })();
+  const LOKAL = BAHASA === "en" ? "en-GB" : "id-ID";
+  // Pengunjung lama (datang sebelum ada panduan) dikenali dari jejak kunjungan sebelumnya: pengaturan tersimpan
+  // (wui-…) atau service worker yang sudah terpasang. Dicek di awal, sebelum situs ini menulis apa pun.
+  const PERNAH_DATANG = (() => {
+    try { for (let k = 0; k < localStorage.length; k++) if (/^wui-/.test(localStorage.key(k) || "")) return true; } catch { /* mode privat */ }
+    return false;
+  })();
+  const SW_LAMA = ("serviceWorker" in navigator ? navigator.serviceWorker.getRegistration().then((r) => !!r) : Promise.resolve(false))
+    .catch(() => false);
+  // ---------- bahasa: Indonesia / English ----------
+  // Teks ditulis dalam bahasa Indonesia di kode. Saat bahasa Inggris dipilih, teks yang tampil di layar diterjemahkan
+  // lewat kamus (cocok persis), frasa (potongan kalimat), dan pola (teks dengan angka/nama). Konten asli dari sumber
+  // (judul berita, isi laporan warga, laporan & rekomendasi PVMBG, kronologi BNPB) sengaja TIDAK diterjemahkan.
+  const KAMUS_EN = {
+    // kepala & pengaturan
+    "LIVE": "LIVE", "Memuat data…": "Loading data…", "Pengaturan": "Settings", "Tampilan": "Appearance", "Tema": "Theme",
+    "Gelap": "Dark", "Terang": "Light", "Bahasa": "Language", "Pasang di HP": "Install on phone",
+    "Pasang What'sUpIndonesia": "Install What'sUpIndonesia", "Sudah terpasang": "Already installed",
+    "Info & sumber data": "Info & data sources", "Lihat panduan": "View guide", "Sumber data": "Data sources",
+    "Bukan sumber resmi.": "Not an official source.", "Info resmi:": "Official info:",
+    "Peringatan tsunami resmi hanya dari": "Official tsunami warnings only from",
+    "Gagal memuat data. Coba muat ulang halaman.": "Failed to load data. Try reloading the page.",
+    "Sumber bermasalah:": "Source problems:",
+    // dock & panel
+    "rumah": "houses", "terendam": "flooded", "orang": "people", "mengungsi": "displaced", "meninggal/": "dead/", "hilang": "missing",
+    "gempa": "earthquakes", "titik panas": "hotspots", "banjir": "floods", "aktif": "active", "gunung": "volcanoes", "waspada": "advisory+",
+    "laporan": "reports", "7 hari": "7 days", "24 jam": "24 h", "Waspada": "Advisory", "Siaga": "Watch", "Awas": "Warning",
+    "berita": "news", "dari": "than", "provinsi": "provinces",
+    "Gempa": "Earthquakes", "Titik panas": "Hotspots", "Hotspot": "Hotspots", "Banjir": "Floods", "Gunung": "Volcanoes",
+    "Gunung api": "Volcanoes", "Gempa · 7 hari": "Earthquakes · 7 days", "Titik panas · 24 jam": "Hotspots · 24 h",
+    "Banjir · waspada": "Floods · alerts", "Gunung api · waspada+": "Volcanoes · advisory+", "Semua lapisan": "All layers",
+    "Sembunyikan daftar": "Hide list", "Tampilkan daftar": "Show list", "Daftar": "List",
+    "Belum ada data untuk saat ini.": "No data at the moment.",
+    "7 hari terakhir · BMKG, dicek tiap menit · laporan warga": "Last 7 days · BMKG, checked every minute · citizen reports",
+    "24 jam terakhir · satelit NASA FIRMS · laporan warga": "Last 24 hours · NASA FIRMS satellites · citizen reports",
+    "Peringatan BMKG · laporan warga (banjir, angin kencang) · data resmi BNPB": "BMKG warnings · citizen reports (floods, strong winds) · official BNPB data",
+    "Tingkat aktivitas · MAGMA Indonesia (PVMBG, Badan Geologi)": "Activity level · MAGMA Indonesia (PVMBG, Geological Agency)",
+    "Daya api kecil": "Low fire power", "besar": "high",
+    "Warna = daya radiasi api (FRP). Titik pudar = keyakinan rendah. Bulatan bergaris putih = laporan warga.":
+      "Color = fire radiative power (FRP). Faded dots = low confidence. White-outlined circles = citizen reports.",
+    "Waspada (BMKG)": "Alert (BMKG)", "Terjadi (warga)": "Happening (citizens)", "Resmi (BNPB)": "Official (BNPB)",
+    "Area tergenang": "Flooded area",
+    "Level I Normal sampai IV Awas. Ikuti rekomendasi dan jarak aman dari PVMBG.": "Level I Normal to IV Warning. Follow PVMBG recommendations and safe distances.",
+    "Waspada sekarang · BMKG": "Active alerts · BMKG", "Banjir terjadi · laporan warga 7 hari": "Floods happening · citizen reports, 7 days",
+    "Angin kencang · laporan warga 7 hari": "Strong winds · citizen reports, 7 days", "Data resmi · BNPB minggu ini": "Official data · BNPB this week",
+    "Area tergenang · PetaBencana 48 jam": "Flooded areas · PetaBencana, 48 h",
+    "Tidak ada peringatan hujan lebat aktif saat ini.": "No active heavy-rain warnings right now.",
+    "Belum ada laporan banjir dari warga.": "No flood reports from citizens yet.",
+    "Data resmi diperbarui mingguan, bisa tertinggal beberapa hari.": "Official data is updated weekly and may lag by a few days.",
+    "Belum ada kejadian banjir tercatat BNPB minggu ini.": "No floods recorded by BNPB this week.",
+    "Kabupaten/kota dengan titik panas terbanyak (24 jam)": "Regencies/cities with the most hotspots (24 h)",
+    "Laporan warga · 7 hari": "Citizen reports · 7 days", "Laporan warga · kebakaran & asap 7 hari": "Citizen reports · fires & haze, 7 days",
+    "Gunung pendakian · tidak dipantau PVMBG": "Hiking mountains · not monitored by PVMBG", "Erupsi tercatat": "Eruption recorded",
+    // ticker
+    "Gempa terbaru · BMKG": "Latest earthquake · BMKG", "Gempa terbesar 24 jam": "Largest earthquake, 24 h",
+    "Titik panas 24 jam": "Hotspots, 24 h", "Waspada banjir · peringatan BMKG": "Flood alert · BMKG warning",
+    "Gunung api · MAGMA Indonesia": "Volcanoes · MAGMA Indonesia", "BARU": "NEW",
+    // popup umum
+    "Detail": "Details", "Berita": "News", "Kondisi": "Conditions", "Laporan": "Report", "Rekomendasi": "Recommendations",
+    "Medsos": "Social media", "Kronologi": "Chronology", "Kecamatan": "Districts", "Kejadian": "Events",
+    "Berita karhutla": "Forest fire news", "Berita banjir": "Flood news", "Detail guncangan": "Shaking details",
+    "Lokasi": "Location", "Kedalaman": "Depth", "Potensi": "Potential", "Wilayah": "Area", "Dirasakan": "Felt",
+    "(laporan BMKG)": "(BMKG report)", "Keyakinan": "Confidence", "Satelit": "Satellite", "Daya api": "Fire power",
+    "Tinggi air": "Water height", "Dampak": "Impact", "Visual": "Visual", "Lainnya": "Other", "Kegempaan": "Seismicity",
+    "Perkiraan radius guncangan (skala MMI)": "Estimated shaking radius (MMI scale)", "Peta guncangan BMKG": "BMKG shakemap",
+    "Waspada hujan lebat": "Heavy rain alert", "Infografis BMKG": "BMKG infographic", "laporan lengkap": "full report",
+    "lihat laporan": "see report", "lihat": "see", "Foto laporan warga": "Citizen report photo",
+    "Belum ada berita media untuk gempa ini.": "No media coverage for this earthquake yet.",
+    "Gempa kecil ini jarang diberitakan media.": "Small earthquakes like this are rarely covered by the media.",
+    "Belum ada berita media untuk kejadian ini.": "No media coverage for this event yet.",
+    "Belum ditemukan berita media untuk kejadian ini.": "No media coverage found for this event.",
+    "Tidak ada kejadian yang tercatat di wilayah ini saat ini.": "No events recorded in this area right now.",
+    "Erupsi tercatat di MAGMA": "Eruption recorded in MAGMA", "Peringatan abu penerbangan (VONA)": "Aviation ash warning (VONA)",
+    "Gunung pendakian": "Hiking mountain",
+    "Tidak termasuk gunung api yang dipantau PVMBG, jadi tidak ada status level aktivitas.": "Not a volcano monitored by PVMBG, so there is no activity level.",
+    "Status Normal: tidak ada peningkatan aktivitas yang dilaporkan.": "Normal status: no increase in activity reported.",
+    "Memuat prakiraan…": "Loading forecast…", "Prakiraan cuaca gagal dimuat. Coba buka lagi nanti.": "Weather forecast failed to load. Try again later.",
+    "Foto & Video Aktivitas Terbaru": "Latest Photos & Videos", "Hari ini": "Today",
+ "Besok": "Tomorrow", "hembusan": "gusts", "Instagram": "Instagram",
+    "Cerah": "Clear", "Cerah berawan": "Partly cloudy", "Berawan": "Cloudy", "Berkabut": "Foggy", "Gerimis": "Drizzle",
+    "Hujan": "Rain", "Salju/es": "Snow/ice", "Hujan lokal": "Showers", "Hujan es": "Hail", "Badai petir": "Thunderstorm",
+    "Senin": "Monday", "Selasa": "Tuesday", "Rabu": "Wednesday", "Kamis": "Thursday", "Jumat": "Friday", "Sabtu": "Saturday", "Minggu": "Sunday",
+    // kualitas udara & angin
+    "Kualitas udara": "Air quality", "Baik": "Good", "Sedang": "Moderate", "Tidak sehat": "Unhealthy",
+    "Sangat tidak sehat": "Very unhealthy", "Berbahaya": "Hazardous", "Stasiun tanpa sensor PM2.5": "Station without a PM2.5 sensor",
+    "Tanpa PM2.5": "No PM2.5", "Indeks per polutan": "Index per pollutant", "Polutan penentu": "Dominant pollutant",
+    "Stasiun terdekat": "Nearest stations", "Perkiraan berikutnya": "Next forecasts", "data lama": "old data",
+    "Udara bersih, aman untuk aktivitas luar ruangan.": "Clean air, safe for outdoor activities.",
+    "Masih dapat diterima. Kelompok sensitif kurangi aktivitas berat di luar.": "Acceptable. Sensitive groups should reduce heavy outdoor activity.",
+    "Kurangi aktivitas luar ruangan; pakai masker bila perlu keluar.": "Reduce outdoor activity; wear a mask if you need to go out.",
+    "Hindari aktivitas luar ruangan; tutup jendela.": "Avoid outdoor activities; close the windows.",
+    "Tetap di dalam ruangan. Kelompok sensitif cari ruangan berudara bersih.": "Stay indoors. Sensitive groups should find a room with clean air.",
+    "Perkiraan = model CAMS (Open-Meteo) yang dikoreksi stasiun PM2.5 terdekat; bukan alat ukur.": "Estimate = CAMS model (Open-Meteo) corrected by nearby PM2.5 stations; not a measurement.",
+    "Angin 10 m di atas permukaan, titik grid ±165 km · model cuaca via Open-Meteo. Bukan peringatan resmi BMKG.": "Wind 10 m above ground, grid points ±165 km apart · weather model via Open-Meteo. Not an official BMKG warning.",
+    "Prakiraan berikutnya (km/jam)": "Next forecasts (km/h)",
+    // cari
+    "Cari daerah, kelurahan, tempat, atau gunung": "Search areas, villages, places, or volcanoes",
+    "Contoh: Bandung, Jawa Timur, Bromo, GBK, Kartini": "Examples: Bandung, East Java, Bromo, GBK, Kartini",
+    "Memuat daftar wilayah…": "Loading the list of areas…", "Daftar wilayah gagal dimuat.": "Failed to load the list of areas.",
+    "Mencari…": "Searching…", "Mencari tempat…": "Searching places…", "Tempat · OpenStreetMap": "Places · OpenStreetMap",
+    "Provinsi": "Province", "Kota": "City", "Kabupaten": "Regency", "Desa/kelurahan": "Village", "Kelurahan": "Urban village",
+    "Lingkungan": "Neighbourhood", "Kawasan": "Quarter", "Dusun": "Hamlet", "Kota kecil": "Town", "Pulau": "Island",
+    "Stadion": "Stadium", "Pusat olahraga": "Sports centre", "Kawasan olahraga": "Sports ground", "Taman": "Park",
+    "Tempat wisata": "Attraction", "Museum": "Museum", "Monumen": "Monument", "Kebun binatang": "Zoo", "Taman hiburan": "Theme park",
+    "Pantai": "Beach", "Puncak": "Peak", "Stasiun": "Station", "Bandara": "Airport", "Kampus": "Campus", "Rumah sakit": "Hospital",
+    "Mal": "Mall", "Pasar": "Market", "Tempat ibadah": "Place of worship", "Lapangan golf": "Golf course", "Teluk": "Bay",
+    "Danau": "Lake", "Air terjun": "Waterfall", "Bangunan bersejarah": "Historic building", "Jalan": "Street", "Tempat": "Place",
+    // panduan
+    "Lewati": "Skip", "Kembali": "Back", "Lanjut": "Next", "Selesai": "Done",
+    "Selamat datang di What'sUpIndonesia": "Welcome to What'sUpIndonesia",
+    "Kejadian di Indonesia dalam satu peta. Ikuti panduan singkat ini, kurang dari 1 menit.": "Events across Indonesia on one map. Take this short tour, under a minute.",
+    "Kabar terbaru": "Latest news",
+    "Kabar penting berganti tiap beberapa detik. Ketuk untuk langsung melihatnya di peta.": "Key updates rotate every few seconds. Tap one to see it on the map.",
+    "Lapisan kejadian": "Event layers",
+    "Pilih Gempa, Titik panas, Banjir, atau Gunung untuk melihat daftar dan lokasinya. Ketuk titik di peta untuk detail, berita, dan sumber datanya.":
+      "Choose Earthquakes, Hotspots, Floods, or Volcanoes to see the list and locations. Tap a point on the map for details, news, and data sources.",
+    "Cari daerah & tempat": "Search areas & places",
+    "Cari provinsi, kota, kelurahan, atau nama tempat. Peta langsung menuju ke sana.": "Search for a province, city, village, or place name. The map takes you straight there.",
+    "Angin & kualitas udara": "Wind & air quality",
+    "Nyalakan animasi arah angin atau peta kualitas udara. Saat aktif, ketuk titik mana pun di peta untuk melihat detailnya.":
+      "Turn on the wind animation or the air quality map. While on, tap anywhere on the map for details.",
+    "Layer": "Layer", "Untuk menyembunyikan semua titik kejadian.": "Hides all event points.",
+    "Ringkasan per daerah": "Summary by area",
+    "Ketuk kabupaten atau kota mana pun di peta untuk melihat ringkasan kejadian dan berita di daerah itu, seperti contoh Kota Jakarta Pusat ini.":
+      "Tap any regency or city on the map to see a summary of events and news there, like this example of Central Jakarta.",
+    "Ganti tema terang/gelap, pasang situs ini di HP, dan lihat sumber data. Panduan ini bisa diputar lagi dari sini.":
+      "Switch light/dark theme, change language, install this site on your phone, and see data sources. You can replay this tour from here.",
+    "Muat ulang": "Reload", "Ambil data dan versi situs terbaru kapan saja.": "Get the latest data and site version at any time.",
+    // label & tombol (atribut)
+    "Muat ulang halaman": "Reload page", "Muat ulang halaman (data & versi terbaru)": "Reload page (latest data & version)",
+    "Cari wilayah (/)": "Search (/)", "Tutup pencarian": "Close search", "Kembali ke pengaturan": "Back to settings",
+    "Kembali ke semua lapisan": "Back to all layers", "Angin: nyala/mati": "Wind: on/off", "Polusi udara (PM2.5): nyala/mati": "Air pollution (PM2.5): on/off",
+    "Lapisan angin": "Wind layer", "Lapisan polusi udara": "Air pollution layer", "Lapisan peta": "Map layers",
+    "Sembunyikan semua lapisan kejadian": "Hide all event layers",
+    "Sembunyikan semua titik kejadian (gempa, titik panas, banjir, gunung, laporan)": "Hide all event points (earthquakes, hotspots, floods, volcanoes, reports)",
+    "Tampilkan lagi semua titik kejadian": "Show all event points again", "Peta Indonesia": "Map of Indonesia",
+    "What'sUpIndonesia — kembali ke semua lapisan": "What'sUpIndonesia — back to all layers",
+    "Cari kabupaten, kota, atau provinsi": "Search regencies, cities, or provinces",
+    "Cari kota, kabupaten, atau provinsi": "Search cities, regencies, or provinces",
+  };
+  // potongan kalimat (diganti di dalam teks yang lebih panjang); yang panjang didahulukan
+  const FRASA_EN = Object.entries({
+    "Gempa (7 hari)": "Earthquakes (7 days)", "Titik panas (24 jam)": "Hotspots (24 h)", "Banjir (waspada)": "Floods (alerts)",
+    "Gunung api (waspada+)": "Volcanoes (advisory+)", "Diperbarui": "Updated", "Laporan warga": "Citizen report",
+    "laporan warga": "citizen reports", "Diukur pukul": "Measured at", "berlaku hingga": "valid until", "hingga": "until",
+    "Prakiraan cuaca di puncak": "Weather forecast at the summit", "Dalam radius": "Within",
+    "Udara di sini": "Air here", "Perkiraan PM2.5": "Estimated PM2.5", "setara ISPU": "equivalent to ISPU",
+    "Ringkasan": "Summary of", "Kejadian di": "Events in", "Belum ada berita banjir di": "No flood news yet in",
+    "Belum ada berita kebakaran hutan/lahan di": "No forest/land fire news yet in", "Belum ada berita kejadian di": "No event news yet in",
+    "Belum ada berita tentang Gunung": "No news yet about Mount", "(36 jam terakhir)": "(last 36 hours)", "(3 hari terakhir)": "(last 3 days)",
+    "Sumber: satelit NASA FIRMS. Titik panas = deteksi panas, belum tentu kebakaran.": "Source: NASA FIRMS satellites. Hotspot = heat detection, not necessarily a fire.",
+    "Sumber: peringatan dini cuaca BMKG": "Source: BMKG early weather warning", "potensi": "potential", "bukan banjir pasti.": "not a confirmed flood.",
+    "Sumber: BNPB (Kejadian Bencana Mingguan) — bisa tertinggal beberapa hari.": "Source: BNPB (weekly disaster events) — may lag by a few days.",
+    "Sumber: laporan warga via PetaBencana.id": "Source: citizen reports via PetaBencana.id", "Sumber: MAGMA Indonesia (PVMBG, Badan Geologi)": "Source: MAGMA Indonesia (PVMBG, Geological Agency)",
+    "Sumber: PVMBG via MAGMA Indonesia": "Source: PVMBG via MAGMA Indonesia", "Sumber:": "Source:",
+    "Radius guncangan: perkiraan kasar dari magnitudo & kedalaman (rumus atenuasi Allen dkk. 2012), bukan pengukuran. Dirasakan & peta guncangan: BMKG.":
+      "Shaking radius: rough estimate from magnitude & depth (Allen et al. 2012 attenuation), not a measurement. Felt reports & shakemap: BMKG.",
+    "Cuaca puncak: model Open-Meteo": "Summit weather: Open-Meteo model", "titik panas: NASA FIRMS": "hotspots: NASA FIRMS",
+    "gempa: BMKG": "earthquakes: BMKG", "level: MAGMA Indonesia (PVMBG)": "level: MAGMA Indonesia (PVMBG)",
+    "lokasi & ketinggian: OpenStreetMap": "location & elevation: OpenStreetMap", "Lokasi: OpenStreetMap (pencarian Photon)": "Location: OpenStreetMap (Photon search)",
+    "Stasiun resmi ISPU Kementerian Lingkungan Hidup": "Official ISPU station, Ministry of Environment",
+    "Diperkirakan": "Estimated to be", "tidak terasa": "not felt", "di permukaan": "at the surface",
+    "pusat gempa sangat dalam": "very deep hypocentre", "magnitudo kecil": "small magnitude",
+    "dan BMKG tidak mencatatnya sebagai gempa dirasakan": "and BMKG did not record it as felt",
+    "Sangat kuat — kerusakan ringan-sedang": "Very strong — light to moderate damage", "Kuat — benda jatuh, retak ringan": "Strong — objects fall, light cracks",
+    "Cukup kuat — dirasakan hampir semua orang": "Fairly strong — felt by almost everyone", "Terasa — jendela & pintu bergetar": "Felt — windows & doors rattle",
+    "Lemah — terasa di dalam rumah": "Weak — felt indoors", "Sangat lemah — dirasakan sebagian orang": "Very weak — felt by some people",
+    "Stasiun ini": "This station", "tidak mengukur PM2.5": "does not measure PM2.5", "(debu halus), polutan utama di kota.": "(fine dust), the main urban pollutant.",
+    "Angkanya tidak bisa dibandingkan dengan stasiun lain. Lihat warna heatmap di sekitarnya.": "Its number can't be compared with other stations. Check the heatmap colors around it.",
+    "Angka ini jauh": "This value is much", "lebih rendah": "lower", "lebih tinggi": "higher",
+    "stasiun sekitarnya": "nearby stations", "nilai tengah ISPU": "median ISPU", "Bisa karena lokasi alat": "Possibly due to the sensor location",
+    "mis. di taman": "e.g. in a park", "mis. dekat sumber asap": "e.g. near a smoke source",
+    "atau gangguan alat, jadi tidak dipakai untuk warna heatmap.": "or a sensor fault, so it is not used for the heatmap colors.",
+    "tanpa sensor PM2.5": "no PM2.5 sensor", "dari sekitar": "than its surroundings", "jauh lebih": "much",
+    "keyakinan tinggi": "high confidence", "berita karhutla": "forest fire news", "rumah terendam": "houses flooded",
+    "gunung lain berstatus Normal (segitiga hijau di peta).": "other volcanoes are at Normal status (green triangles on the map).",
+    "gunung berstatus": "volcanoes at", "Hujan lebat di": "Heavy rain in", "terbanyak": "most in",
+    "Kota ·": "City ·", "Kabupaten ·": "Regency ·", "tidak ditemukan.": "not found.", "Tidak hujan": "No rain",
+    "Gagal": "Failed", "Bukan peringatan resmi": "Not an official warning",
+  }).sort((a, b) => b[0].length - a[0].length).map(([id, en]) => [new RegExp(
+    (/^[\p{L}\d]/u.test(id) ? String.raw`(?<![\p{L}\d])` : "") + id.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)
+      + (/[\p{L}\d]$/u.test(id) ? String.raw`(?![\p{L}\d])` : ""), "gu"), en]);
+  const POLA_EN = [
+    [/^baru saja$/, "just now"], [/(?<!\d)1 hari lalu/g, "1 day ago"], [/(\d+) menit lalu/g, "$1 min ago"], [/(\d+) jam lalu/g, "$1 h ago"], [/(\d+) hari lalu/g, "$1 days ago"],
+    [/(\d+) menit lagi/g, "in $1 min"], [/(\d+) jam lagi/g, "in $1 h"], [/^berakhir$/, "ended"],
+    [/(\d[\d.,]*) kejadian/g, "$1 events"], [/(\d[\d.,]*) berita/g, "$1 news"], [/(\d+) dari (\d+)/g, "$1 of $2"],
+    [/(\d[\d.,]*) km (barat daya|barat laut|timur laut|tenggara|barat|timur|utara|selatan)\b/g, (m, km, a) =>
+      `${km} km ${{ "barat daya": "southwest of", "barat laut": "northwest of", "timur laut": "northeast of", tenggara: "southeast of",
+        barat: "west of", timur: "east of", utara: "north of", selatan: "south of" }[a]}`],
+    [/Level (IV|III|II|I) · (Awas|Siaga|Waspada|Normal)/g, (m, r, n) => `Level ${r} · ${{ Awas: "Warning", Siaga: "Watch", Waspada: "Advisory", Normal: "Normal" }[n]}`],
+    [/\b(Awas|Siaga|Waspada) \(Level (IV|III|II)\)/g, (m, n, r) => `${{ Awas: "Warning", Siaga: "Watch", Waspada: "Advisory" }[n]} (Level ${r})`],
+    [/^Level (IV|III|II|I) · /, "Level $1 · "], [/^Daftar (.+)$/, "List: $1"], [/^Kedalaman (\d)/, "Depth $1"],
+    [/kedalaman ([\d.,?]+) km/g, "depth $1 km"], [/(\d+) mdpl/g, "$1 m asl"], [/±(\d[\d.,]*) mdpl/g, "±$1 m asl"],
+    [/Tidak berpotensi tsunami/g, "No tsunami potential"], [/Berpotensi tsunami/g, "Tsunami potential"],
+    [/Pusat gempa berada di (laut|darat) /g, ""], [/(\d+) km lalu/g, "$1 km ago"],
+    [/^Satelit (.+) · terbaru$/, "Satellite $1 · latest"],
+    [/^Gempa M(\S+)$/, "Earthquake M$1"],
+    [/^Laporan warga · (banjir|kebakaran|angin kencang|gempa|kabut asap|gunung api)$/, (m, j) => `Citizen report · ${{ banjir: "flood",
+      kebakaran: "fire", "angin kencang": "strong wind", gempa: "earthquake", "kabut asap": "haze", "gunung api": "volcano" }[j]}`],
+    [/· Banjir( ·|$)/g, "· Flood$1"],
+    [/^Laporan (banjir|kebakaran|angin kencang|gempa|kabut asap|gunung api)$/, (m, j) => `Report: ${{ banjir: "flood", kebakaran: "fire",
+      "angin kencang": "strong wind", gempa: "earthquake", "kabut asap": "haze", "gunung api": "volcano" }[j]}`],
+    [/(: |· )(Sangat tidak sehat|Tidak sehat|Berbahaya|Sedang|Baik)$/, (m, a, k) => a + { Baik: "Good", Sedang: "Moderate",
+      "Tidak sehat": "Unhealthy", "Sangat tidak sehat": "Very unhealthy", Berbahaya: "Hazardous" }[k]],
+    [/· laporan (Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu),/g, "· report $1,"],
+    [/\b(Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu)\b(?=,? \d)/g, (m, h) => ({ Senin: "Monday", Selasa: "Tuesday", Rabu: "Wednesday",
+      Kamis: "Thursday", Jumat: "Friday", Sabtu: "Saturday", Minggu: "Sunday" }[h])],
+    [/\b(\d{1,2}) (Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember) (\d{4})/g, (m, d, b, y) =>
+      `${d} ${{ Januari: "January", Februari: "February", Maret: "March", April: "April", Mei: "May", Juni: "June", Juli: "July",
+        Agustus: "August", September: "September", Oktober: "October", November: "November", Desember: "December" }[b]} ${y}`],
+    [/Provinsi · (\d+) kabupaten\/kota/g, "Province · $1 regencies/cities"],
+    [/^Perkiraan dari citra satelit pukul/, "Estimate from satellite image at"],
+  ];
+  const JANGAN_TERJEMAH = ".nt, .dl-stack dd, .rek, .asli, .maplibregl-ctrl-attrib, [data-asli]";
+  function terjemahTeks(t) {
+    const inti = t.trim();
+    if (!inti || !/[A-Za-z]/.test(inti)) return t;
+    if (KAMUS_EN[inti]) return t.replace(inti, KAMUS_EN[inti]);
+    let h = t;
+    for (const [re, ganti] of POLA_EN) h = h.replace(re, ganti);
+    for (const [re, en] of FRASA_EN) h = h.replace(re, en);
+    const inti2 = h.trim();
+    return KAMUS_EN[inti2] ? h.replace(inti2, KAMUS_EN[inti2]) : h;
+  }
+  function terjemahNode(akar) {
+    if (akar.nodeType === 3) {
+      const p = akar.parentElement;
+      if (p && !p.closest(JANGAN_TERJEMAH) && !/^(SCRIPT|STYLE)$/.test(p.tagName)) {
+        const baru = terjemahTeks(akar.nodeValue);
+        if (baru !== akar.nodeValue) akar.nodeValue = baru;
+      }
+      return;
+    }
+    if (akar.nodeType !== 1 || akar.closest?.(JANGAN_TERJEMAH)) return;
+    for (const at of ["title", "aria-label", "placeholder", "alt"]) {
+      const v = akar.getAttribute?.(at);
+      if (v) { const b = terjemahTeks(v); if (b !== v) akar.setAttribute(at, b); }
+    }
+    const jalan = document.createTreeWalker(akar, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    let n = jalan.nextNode();
+    while (n) { if (n !== akar) terjemahNode(n); n = jalan.nextNode(); }
+  }
+  if (BAHASA === "en") {
+    document.documentElement.lang = "en";
+    document.title = "What'sUpIndonesia — What's happening in Indonesia today?";
+    terjemahNode(document.body);
+    new MutationObserver((ms) => {
+      for (const m of ms) {
+        if (m.type === "characterData") terjemahNode(m.target);
+        else { m.addedNodes.forEach(terjemahNode); if (m.type === "attributes") terjemahNode(m.target); }
+      }
+    }).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["title", "aria-label", "placeholder"] });
+  }
+
 
   // Statistik pemakaian fitur (Umami, tanpa cookie). Diam saja kalau skrip analitik tidak termuat.
   function lacak(nama, data) {
@@ -27,6 +293,8 @@
     gunung: '<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>',
     berita: '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-4 0v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z"/>',
     pin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+    lapisan: '<path d="m12 2 10 5-10 5L2 7l10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>',
+    lapisanMati: '<path d="m12 2 10 5-3.5 1.75"/><path d="M8.6 9.7 2 7l4-2"/><path d="m2 17 10 5 6-3"/><path d="m2 12 10 5 3-1.5"/><path d="M2 2l20 20"/>',
   };
   const icon = (k) => `<svg viewBox="0 0 24 24">${P[k] || P.pin}</svg>`;
 
@@ -36,6 +304,10 @@
     gempa: { warna: "#b37feb", ic: "gempa" }, "gunung api": { warna: "#e55353", ic: "gunung" },
   };
   const jWarna = (j) => JENIS[j]?.warna || "#cfd8e3";
+  // Laporan warga (PetaBencana.id) tidak punya dock sendiri: tampil di lapisan sesuai jenis bencananya
+  const LAPORAN_KE = { banjir: "banjir", "angin kencang": "banjir", kebakaran: "titik_panas", "kabut asap": "titik_panas",
+    gempa: "gempa", "gunung api": "gunung_api" };
+  const jenisLaporanDi = (mode) => Object.keys(LAPORAN_KE).filter((j) => LAPORAN_KE[j] === mode);
   const jIcon = (j) => icon(JENIS[j]?.ic || "pin");
 
   // Titik panas: oranye (daya api kecil) → merah tua (daya api besar), berdasarkan FRP (MW)
@@ -52,11 +324,10 @@
   const ROMAWI = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9 };
 
   const MODES = {
-    gempa: { title: "Gempa", sub: "7 hari terakhir · BMKG, dicek tiap menit", c: "#ff4d4f", ic: "gempa", layers: ["gempa", "gempa-label"] },
-    titik_panas: { title: "Titik panas", sub: "24 jam terakhir · satelit NASA FIRMS", c: "#ff6a1a", ic: "api", layers: ["titik_panas", "titik_panas-glow"] },
-    laporan: { title: "Laporan warga", sub: "7 hari terakhir · PetaBencana.id + berita media", c: "#3ea6ff", ic: "lapor", layers: ["laporan"] },
+    gempa: { title: "Gempa", sub: "7 hari terakhir · BMKG, dicek tiap menit · laporan warga", c: "#ff4d4f", ic: "gempa", layers: ["gempa", "gempa-label"] },
+    titik_panas: { title: "Titik panas", sub: "24 jam terakhir · satelit NASA FIRMS · laporan warga", c: "#ff6a1a", ic: "api", layers: ["titik_panas", "titik_panas-glow"] },
     // only = lapisan yang hanya tampil di mode ini (tidak di beranda)
-    banjir: { title: "Banjir", sub: "Peringatan BMKG · laporan warga · data resmi BNPB", c: "#22d3ee", ic: "banjir",
+    banjir: { title: "Banjir", sub: "Peringatan BMKG · laporan warga (banjir, angin kencang) · data resmi BNPB", c: "#22d3ee", ic: "banjir",
       layers: ["peringatan-fill", "peringatan-line", "bnpb-fill", "bnpb-line", "banjir-area-fill", "banjir-area-line"],
       only: ["banjir-lapor-glow", "banjir-lapor"] },
     gunung_api: { title: "Gunung api", sub: "Tingkat aktivitas · MAGMA Indonesia (PVMBG, Badan Geologi)", c: "#f59e0b", ic: "gunung",
@@ -84,7 +355,7 @@
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const safeUrl = (u) => (/^https:\/\//i.test(u || "") ? u : null);
-  const fmtWIB = (iso) => new Intl.DateTimeFormat("id-ID", {
+  const fmtWIB = (iso) => new Intl.DateTimeFormat(LOKAL, {
     timeZone: "Asia/Jakarta", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
   }).format(new Date(iso)) + " WIB";
   function ago(iso) {
@@ -95,7 +366,7 @@
     if (h < 24) return `${h} jam lalu`;
     return `${Math.round(h / 24)} hari lalu`;
   }
-  const num = (n) => new Intl.NumberFormat("id-ID").format(n);
+  const num = (n) => new Intl.NumberFormat(LOKAL).format(n);
   // Angka di dock/panel per lapisan
   function hitung(mode) {
     if (mode === "gunung_api") return (state.data.gunung_api?.features || []).filter((f) => f.properties.level >= 2).length;
@@ -113,24 +384,43 @@
     // arah mata angin huruf kecil: "BaratDaya" -> "barat daya"
     t = t.replace(/\b([Bb]arat|[Tt]imur) ?([Ll]aut|[Dd]aya)\b/g, (_, a, b) => `${a.toLowerCase()} ${b.toLowerCase()}`)
       .replace(/(\d+ km )(Utara|Selatan|Timur|Barat|Tenggara)\b/g, (_, k, w) => k + w.toLowerCase())
-      .replace(/([a-z])-([A-Z])/g, "$1, $2");
+      .replace(/([a-z])-([A-Z])/g, "$1, $2")
+      .replace(/^(\d+ km) (?=[A-Z])/, "$1 dari ");   // BMKG kadang tanpa arah: "48 km Ruteng" -> "48 km dari Ruteng"
     return t;
   }
-  const jamWIB = (iso) => new Intl.DateTimeFormat("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })
+  const jamWIB = (iso) => new Intl.DateTimeFormat(LOKAL, { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })
     .format(new Date(iso)) + " WIB";
   function sisa(iso) {
     const m = Math.round((new Date(iso) - Date.now()) / 60000);
     if (m <= 0) return "berakhir";
     return m < 60 ? `${m} menit lagi` : `${Math.round(m / 60)} jam lagi`;
   }
-  const tglID = (ymd) => new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", timeZone: "UTC" })
+  const tglID = (ymd) => new Intl.DateTimeFormat(LOKAL, { day: "numeric", month: "short", timeZone: "UTC" })
     .format(new Date(ymd + "T00:00:00Z"));
   const where = (p) => [p.kabupaten, p.provinsi].filter(Boolean).join(", ");
   const isMobile = () => window.innerWidth <= 760;
   const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 
+  // Data live diambil dulu dari VPS (robot tiap 5 menit). Bila VPS tidak menjawab, atau datanya basi
+  // (robot VPS berhenti), pakai salinan dari GitHub Pages (robot GitHub) selama 5 menit berikutnya.
+  // Di localhost tetap memakai data lokal, kecuali alamat diberi ?vps.
+  const DATA_VPS = "https://data.whatsupindonesia.id/data/";
+  const PAKAI_VPS = !/^(localhost|127\.|\[::1\])/.test(location.hostname) || /[?&]vps\b/.test(location.search);
+  let vpsMatiSampai = 0;
   async function getJSON(path) {
-    const r = await fetch(`${DATA}${path}?t=${Math.floor(Date.now() / 60000)}`);
+    const q = `${path}?t=${Math.floor(Date.now() / 60000)}`;
+    if (PAKAI_VPS && path.startsWith("live/") && Date.now() > vpsMatiSampai) {
+      try {
+        const r = await fetch(DATA_VPS + q, AbortSignal.timeout ? { signal: AbortSignal.timeout(8000) } : {});
+        if (r.ok) {
+          const j = await r.json();
+          const basi = path === "live/meta.json" && Date.now() - Date.parse(j.diperbarui) > 40 * 60000;
+          if (!basi) return j;
+        }
+      } catch { /* VPS tidak menjawab */ }
+      vpsMatiSampai = Date.now() + 5 * 60000;
+    }
+    const r = await fetch(`${DATA}${q}`);
     if (!r.ok) throw new Error(`${path}: ${r.status}`);
     return r.json();
   }
@@ -155,9 +445,11 @@
     const H = window.innerHeight;
     const tk = $("#ticker"), dock = $("#dock"), panel = $("#panel");
     const top = (tk && !tk.hidden ? tk.getBoundingClientRect().bottom : 70) + 16;
-    let bottomTop = dock.getBoundingClientRect().top;
-    if (isMobile() && !panel.hidden) bottomTop = Math.min(bottomTop, panel.getBoundingClientRect().top);
-    const bottom = Math.max(H - bottomTop + 16, 40);
+    let bottomTop = dock.offsetHeight ? dock.getBoundingClientRect().top : H;   // dock tersembunyi (mode kartu) = tak memakan tempat
+    if (isMobile() && !panel.hidden && panel.offsetHeight) bottomTop = Math.min(bottomTop, panel.getBoundingClientRect().top);
+    let bottom = Math.max(H - bottomTop + 16, 40);
+    // pengaman: sisakan minimal 120 px peta, kalau tidak MapLibre gagal menghitung kamera (NaN)
+    if (top + bottom > H - 120) bottom = Math.max(H - 120 - top, 20);
     const left = !isMobile() && state.mode && !state.listHidden ? 420 : 30;
     return { top, bottom, left, right: 30 };
   }
@@ -187,12 +479,18 @@
     onAdd() {
       const d = document.createElement("div");
       d.className = "maplibregl-ctrl maplibregl-ctrl-group";
-      d.innerHTML = `<button type="button" id="angin-btn" class="ctrl-angin" aria-pressed="false" title="Angin: nyala/mati"
+      d.innerHTML = `<button type="button" id="sembunyi-btn" class="ctrl-sembunyi" aria-pressed="false"
+        title="Sembunyikan semua titik kejadian (gempa, titik panas, banjir, gunung, laporan)" aria-label="Sembunyikan semua lapisan kejadian">${icon("lapisan")}</button>
+        <button type="button" id="angin-btn" class="ctrl-angin" aria-pressed="false" title="Angin: nyala/mati"
         aria-label="Lapisan angin">${icon("angin")}</button>
         <button type="button" id="udara-btn" class="ctrl-udara" aria-pressed="false" title="Polusi udara (PM2.5): nyala/mati"
         aria-label="Lapisan polusi udara"><svg viewBox="0 0 24 24"><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="M16 17H7"/><path d="M17 21H9"/></svg></button>
         <button type="button" id="hujan-btn" class="ctrl-hujan" aria-pressed="false" title="Hujan sekarang (satelit + bandara): nyala/mati"
         aria-label="Lapisan hujan">${icon("hujan")}</button>`;
+      d.querySelector("#sembunyi-btn").addEventListener("click", () => {
+        setSembunyi(!state.sembunyi);
+        if (state.sembunyi) lacak("Sembunyikan semua lapisan");
+      });
       d.querySelector("#angin-btn").addEventListener("click", () => { setAngin(!state.angin); if (state.angin) lacak("Nyalakan angin"); });
       d.querySelector("#udara-btn").addEventListener("click", () => { setUdara(!state.udara); if (state.udara) lacak("Nyalakan kualitas udara"); });
       d.querySelector("#hujan-btn").addEventListener("click", () => { setHujan(!state.hujan); if (state.hujan) lacak("Nyalakan hujan"); });
@@ -268,12 +566,13 @@
     map.addLayer({
       id: "wilayah-fill", type: "fill", source: "wilayah",
       paint: { "fill-color": W.hover,
-        "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.07, 0.0] },
+        "fill-opacity": 0 },   // tak terlihat: hanya untuk menangkap klik wilayah (tanpa efek sorot saat kursor lewat)
     }, below);
     map.addLayer({
       id: "wilayah-line", type: "line", source: "wilayah",
-      paint: { "line-color": W.garis, "line-opacity": ["interpolate", ["linear"], ["zoom"], 4, 0.2, 8, 0.55],
-        "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.3, 9, 1.2] },
+      // batas kabupaten/kota tipis & samar agar label peta dasar tetap mudah dibaca (area tetap bisa diklik)
+      paint: { "line-color": W.garis, "line-opacity": ["interpolate", ["linear"], ["zoom"], 4, 0.1, 8, 0.25, 11, 0.32],
+        "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.25, 9, 0.7, 12, 0.9] },
     }, below);
 
     const empty = { type: "FeatureCollection", features: [] };
@@ -410,8 +709,9 @@
     map.addSource("udara-img", { type: "image", url: GAMBAR_KOSONG, coordinates: [[94, 7], [142, 7], [142, -12], [94, -12]] });
     map.addLayer({ id: "udara-img", type: "raster", source: "udara-img",
       layout: { visibility: state.udara ? "visible" : "none" },
-      paint: { "raster-opacity": state.tema === "terang" ? 0.95 : 1, "raster-resampling": "linear", "raster-fade-duration": 0 } },
-    "peringatan-fill");
+      paint: { "raster-opacity": 1, "raster-resampling": "linear", "raster-fade-duration": 0 } },
+    // di BAWAH label peta dasar (nama jalan/kota/negara tetap terbaca di atas warna heatmap)
+    map.getLayer("highway_name_other") ? "highway_name_other" : "peringatan-fill");
     // Hujan: 4 frame animasi (citra satelit dikoreksi bandara), hanya satu yang terlihat pada satu waktu
     for (let k = 0; k < 4; k++) {
       map.addSource(`hujan-${k}`, { type: "image", url: GAMBAR_KOSONG, coordinates: [[90, 21.9], [157.5, 21.9], [157.5, -21.9], [90, -21.9]] });
@@ -490,7 +790,8 @@
     terapkanUdara();
     terapkanHujan();
     // Intro: terbang dari jauh ke Indonesia
-    setTimeout(() => map.fitBounds(INDONESIA, { padding: viewPadding(), duration: REDUCED ? 0 : 2600,
+    // tautan ?gempa= / mode kartu: kamera diatur oleh bukaGempaTautan, jangan ditimpa animasi pembuka
+    if (!KARTU && !/[?&]gempa=/.test(location.search)) setTimeout(() => map.fitBounds(INDONESIA, { padding: viewPadding(), duration: REDUCED ? 0 : 2600,
       curve: 1.6, essential: true }), REDUCED ? 0 : 250);
   });
 
@@ -744,7 +1045,7 @@
       items.push({ c: jWarna(p.jenis), badge: jIcon(p.jenis), kicker: `Laporan warga · ${p.jenis}`,
         main: `${p.kabupaten || "Lokasi"}${p.provinsi ? ", " + p.provinsi : ""}`,
         sub: `${ago(p.waktu)}${p.n_berita ? ` · ${p.n_berita} berita` : ""}`,
-        go: () => { setMode("laporan"); setTimeout(() => focusFeature("laporan", lap), 80); } });
+        go: () => { setMode(LAPORAN_KE[p.jenis] || null); setTimeout(() => focusFeature("laporan", lap), 80); } });
     }
     return items;
   }
@@ -812,12 +1113,24 @@
         el.className = "pulse";
         return new maplibregl.Marker({ element: el }).setLngLat(f.geometry.coordinates).addTo(map);
       });
-    const show = !state.mode || state.mode === "gempa";
+    const show = !state.sembunyi && (!state.mode || state.mode === "gempa");
     state.pulseMarkers.forEach((m) => { m.getElement().style.display = show ? "" : "none"; });
   }
 
   // ---------- mode / lapisan khusus ----------
+  function setSembunyi(on) {
+    state.sembunyi = on;
+    const b = $("#sembunyi-btn");
+    if (b) {
+      b.setAttribute("aria-pressed", String(on));
+      b.innerHTML = icon(on ? "lapisanMati" : "lapisan");
+      b.title = on ? "Tampilkan lagi semua titik kejadian" : "Sembunyikan semua titik kejadian (gempa, titik panas, banjir, gunung, laporan)";
+    }
+    document.body.classList.toggle("lapisan-sembunyi", on);
+    applyMode(false);
+  }
   function setMode(mode) {
+    if (state.sembunyi && mode) { state.sembunyi = false; setSembunyi(false); }   // memilih lapisan = tampilkan lagi
     state.mode = MODES[mode] ? mode : null;
     state.jenis = "semua";
     const want = state.mode ? `#${state.mode}` : " ";
@@ -866,7 +1179,16 @@
       cfg.layers.forEach((id) => map.setLayoutProperty(id, "visibility", on ? "visible" : "none"));
       (cfg.only || []).forEach((id) => map.setLayoutProperty(id, "visibility", mode === k ? "visible" : "none"));
     }
-    map.setFilter("laporan", null);
+    // titik laporan warga: semua jenis di beranda; di tiap lapisan hanya jenis yang sesuai
+    // (laporan banjir di lapisan Banjir sudah punya gaya sendiri: banjir-lapor)
+    const jl = mode ? jenisLaporanDi(mode).filter((j) => !(mode === "banjir" && j === "banjir")) : null;
+    map.setFilter("laporan", jl ? ["in", ["get", "jenis"], ["literal", jl]] : null);
+    map.setLayoutProperty("laporan", "visibility", !jl || jl.length ? "visible" : "none");
+    // tombol "sembunyikan semua lapisan": peta bersih, hanya peta dasar + angin/kualitas udara
+    if (state.sembunyi) {
+      for (const cfg of Object.values(MODES)) [...cfg.layers, ...(cfg.only || [])].forEach((id) => map.setLayoutProperty(id, "visibility", "none"));
+      map.setLayoutProperty("laporan", "visibility", "none");
+    }
     clearRings();
     if (state.popup) state.popup.remove();
     if (state.data.gempa) renderPulses();
@@ -900,39 +1222,59 @@
   function legendHTML(mode) {
     if (mode === "titik_panas") {
       return `<div class="row"><span>Daya api kecil</span><span class="ramp"></span><span>besar</span></div>
-        <div class="note">Warna = daya radiasi api (FRP). Titik pudar = keyakinan rendah.</div>`;
+        <div class="note">Warna = daya radiasi api (FRP). Titik pudar = keyakinan rendah. Bulatan bergaris putih = laporan warga.</div>`;
     }
-    if (mode === "banjir") {
-      return `<div class="row"><span class="key" style="--c:${WARNA_WASPADA}55;--b:${WARNA_WASPADA}"><i></i>Waspada (BMKG)</span>
-        <span class="key" style="--c:#3ea6ff;--b:#fff"><i style="border-radius:50%"></i>Terjadi (warga)</span>
-        <span class="key" style="--c:${WARNA_BNPB}44;--b:${WARNA_BNPB}"><i></i>Resmi (BNPB)</span>
-        ${state.data.banjir_area?.features.length ? `<span class="key" style="--c:#3b82f688;--b:#3b82f6"><i></i>Area tergenang</span>` : ""}</div>`;
-    }
+    if (mode === "banjir") return "";   // keterangan warna = tombol tab di atas daftar
     if (mode === "gunung_api") {
       return `<div class="row">${[4, 3, 2, 1].map((lv) => `<span class="key tri">${segitiga(LEVEL_GUNUNG[lv].warna)}${LEVEL_GUNUNG[lv].nama}</span>`).join("")}</div>
         <div class="note">Level I Normal sampai IV Awas. Ikuti rekomendasi dan jarak aman dari PVMBG.</div>`;
     }
-    return ""; // gempa & laporan: cukup daftar
+    return ""; // gempa: cukup daftar
   }
 
+  // Lapisan Banjir: keterangan Waspada/Terjadi/Resmi sekaligus tombol tab daftar (warnanya = warna di peta)
+  function tabBanjir() {
+    const d = state.data;
+    const n = { waspada: d.peringatan.features.length,
+      terjadi: d.laporan.features.filter((f) => ["banjir", "angin kencang"].includes(f.properties.jenis)).length + (d.banjir_area?.features.length || 0),
+      resmi: d.banjir_bnpb.features.length };
+    if (!state.banjirTab) state.banjirTab = n.waspada ? "waspada" : n.terjadi ? "terjadi" : "resmi";
+    return state.banjirTab;
+  }
   function renderChips() {
     const box = $("#chips");
-    if (state.mode !== "laporan") { box.hidden = true; return; }
-    const counts = {};
-    for (const f of state.data.laporan.features) counts[f.properties.jenis] = (counts[f.properties.jenis] || 0) + 1;
-    const order = ["banjir", "kebakaran", "angin kencang", "gempa", "kabut asap", "gunung api"];
-    const jenisList = [...order.filter((j) => counts[j]), ...Object.keys(counts).filter((j) => !order.includes(j))];
+    box.classList.toggle("tab3", state.mode === "banjir");
+    if (state.mode !== "banjir" || !state.data.gempa) { box.hidden = true; return; }
+    const d = state.data, tab = tabBanjir();
+    const daftar = [
+      ["waspada", "Waspada (BMKG)", WARNA_WASPADA, d.peringatan.features.length],
+      ["terjadi", "Terjadi (warga)", "#3ea6ff", d.laporan.features.filter((f) => ["banjir", "angin kencang"].includes(f.properties.jenis)).length + (d.banjir_area?.features.length || 0)],
+      ["resmi", "Resmi (BNPB)", WARNA_BNPB, d.banjir_bnpb.features.length],
+    ];
     box.hidden = false;
-    box.innerHTML = [`<button class="chip" data-j="semua" style="--c:#ffffff" aria-pressed="${state.jenis === "semua"}">Semua <b>${num(state.data.laporan.features.length)}</b></button>`,
-      ...jenisList.map((j) => `<button class="chip" data-j="${esc(j)}" style="--c:${jWarna(j)}" aria-pressed="${state.jenis === j}"><i></i>${esc(j[0].toUpperCase() + j.slice(1))} <b>${num(counts[j])}</b></button>`)].join("");
+    box.innerHTML = daftar.map(([id, label, c, n]) =>
+      `<button class="chip" data-bt="${id}" style="--c:${c}" aria-pressed="${tab === id}"><i></i>${esc(label)} <b>${num(n)}</b></button>`).join("");
     box.querySelectorAll(".chip").forEach((b) => b.addEventListener("click", () => {
-      state.jenis = b.dataset.j;
-      if (state.mapReady) map.setFilter("laporan", state.jenis === "semua" ? null : ["==", ["get", "jenis"], state.jenis]);
-      renderChips();
-      renderList();
+      state.banjirTab = b.dataset.bt;
+      lacak("Tab banjir", { tab: b.dataset.bt });
+      renderChips(); renderList();
     }));
   }
 
+  // Bagian "Laporan warga" di daftar tiap lapisan (baris ditambahkan ke `rows` dengan kind "lapor")
+  function seksiLaporan(jenis, judul, rows, mulai) {
+    const fs = state.data.laporan.features.filter((f) => jenis.includes(f.properties.jenis));
+    if (!fs.length) return "";
+    let i = mulai;
+    return `<div class="sec-title" style="--c:${jWarna(jenis[0])};margin-top:12px"><i></i>${esc(judul)}<span>${num(fs.length)}</span></div>` +
+      fs.map((f) => {
+        const p = f.properties, c = jWarna(p.jenis); rows.push({ kind: "lapor", f });
+        return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${c}26;color:${c}">${jIcon(p.jenis)}</span>
+          <span class="item-main"><div class="item-title">${jenis.length > 1 ? `<span class="tag">${esc(p.jenis)}</span> ` : ""}${esc(where(p) || "Lokasi")}</div>
+          <div class="item-sub">${esc(ago(p.waktu))}${p.teks ? ` · <span class="asli">${esc(p.teks.slice(0, 90)) + (p.teks.length > 90 ? "…" : "")}</span>` : ""}</div>
+          ${p.n_berita ? `<span class="item-news">${icon("berita")} ${p.n_berita} berita</span>` : ""}</span></button>`;
+      }).join("");
+  }
   function renderList() {
     const list = $("#list"), t = state.mode;
     let rows = [], html = "";
@@ -946,6 +1288,8 @@
           <div class="item-sub">${esc(ago(p.waktu))} · ${esc(fmtWIB(p.waktu))} · kedalaman ${esc(p.kedalaman_km ?? "?")} km</div>
           ${beritaGempa(p).length ? `<span class="item-news">${icon("berita")} ${beritaGempa(p).length} berita</span>` : ""}</span></button>`;
       }).join("");
+      rows = [...rows];
+      html += seksiLaporan(["gempa"], "Laporan warga · 7 hari", rows, rows.length);
     } else if (t === "titik_panas") {
       const by = new Map();
       for (const f of state.data.titik_panas.features) {
@@ -954,53 +1298,58 @@
         const o = by.get(k); o.n++; if (p.keyakinan === "tinggi") o.tinggi++;
       }
       rows = [...by.values()].sort((a, b) => b.n - a.n).slice(0, 30);
-      const max = rows[0]?.n || 1;
+      const max = rows[0]?.n || 1, nKab = rows.length;
       html = rows.length ? `<div class="item-sub" style="padding:4px 10px 6px">Kabupaten/kota dengan titik panas terbanyak (24 jam)</div>` +
         rows.map((r, i) => `<button class="item" data-i="${i}" style="--i:${i}"><span class="badge">${num(r.n)}</span>
           <span class="item-main"><div class="item-title">${esc(r.p.kabupaten)}</div>
           <div class="item-sub">${esc(r.p.provinsi)} · ${num(r.tinggi)} keyakinan tinggi</div>
           <div class="bar"><i style="width:${(100 * r.n / max).toFixed(1)}%"></i></div>
           ${beritaApi(r.p.wilayah_id).length ? `<span class="item-news">${icon("berita")} ${beritaApi(r.p.wilayah_id).length} berita karhutla</span>` : ""}</span></button>`).join("") : "";
+      html += seksiLaporan(["kebakaran", "kabut asap"], "Laporan warga · kebakaran & asap 7 hari", rows, nKab);
     } else if (t === "banjir") {
-      // Tiga bagian: waspada (BMKG), terjadi (warga), resmi (BNPB)
+      // Tab: Waspada (BMKG) · Terjadi (laporan warga + area tergenang) · Resmi (BNPB) — hanya tab terpilih yang tampil
+      const tab = tabBanjir();
       const waspada = state.data.peringatan.features;
       const terjadi = state.data.laporan.features.filter((f) => f.properties.jenis === "banjir");
       const resmi = state.data.banjir_bnpb.features;
+      const area = state.data.banjir_area?.features || [];
       let i = 0;
       const sec = (title, c, n) => `<div class="sec-title" style="--c:${c}"><i></i>${title}<span>${num(n)}</span></div>`;
-      html += sec("Waspada sekarang · BMKG", WARNA_WASPADA, waspada.length);
-      html += waspada.length ? waspada.map((f) => {
-        const p = f.properties; rows.push({ kind: "waspada", f });
-        const kab = (p.kabupaten_list || []).slice(0, 3).join(", ") + ((p.kabupaten_list || []).length > 3 ? ` +${p.kabupaten_list.length - 3}` : "");
-        return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${WARNA_WASPADA}26;color:${WARNA_WASPADA}">${icon("banjir")}</span>
-          <span class="item-main"><div class="item-title">${esc(p.provinsi || "Peringatan")}</div>
-          <div class="item-sub">${esc(kab || "")}${kab ? " · " : ""}hingga ${esc(jamWIB(p.berakhir))} (${esc(sisa(p.berakhir))})</div></span></button>`;
-      }).join("") : `<div class="sec-note">Tidak ada peringatan hujan lebat aktif saat ini.</div>`;
-      html += sec("Banjir terjadi · laporan warga 7 hari", "#3ea6ff", terjadi.length);
-      html += terjadi.length ? terjadi.map((f) => {
-        const p = f.properties; rows.push({ kind: "terjadi", f });
-        return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:#3ea6ff26;color:#3ea6ff">${icon("banjir")}</span>
-          <span class="item-main"><div class="item-title">${esc(where(p) || "Lokasi")}</div>
-          <div class="item-sub">${esc(ago(p.waktu))}${p.teks ? " · " + esc(p.teks.slice(0, 90)) + (p.teks.length > 90 ? "…" : "") : ""}</div>
-          ${p.n_berita ? `<span class="item-news">${icon("berita")} ${p.n_berita} berita</span>` : ""}</span></button>`;
-      }).join("") : `<div class="sec-note">Belum ada laporan banjir dari warga.</div>`;
-      html += sec("Data resmi · BNPB minggu ini", WARNA_BNPB, resmi.length);
-      html += resmi.length ? resmi.map((f) => {
-        const p = f.properties; rows.push({ kind: "resmi", f });
-        return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${WARNA_BNPB}22;color:${WARNA_BNPB};font-size:11px">BNPB</span>
-          <span class="item-main"><div class="item-title">${esc(p.kabupaten || p.kabupaten_bnpb)}</div>
-          <div class="item-sub">${esc(tglID(p.tanggal))} · ${esc(p.kategori)}${p.rumah_terendam ? ` · ${num(p.rumah_terendam)} rumah terendam` : ""}${p.mengungsi ? ` · ${num(p.mengungsi)} mengungsi` : ""}</div></span></button>`;
-      }).join("") + `<div class="sec-note">Data resmi diperbarui mingguan, bisa tertinggal beberapa hari.</div>`
-        : `<div class="sec-note">Belum ada kejadian banjir tercatat BNPB minggu ini.</div>`;
-      const area = state.data.banjir_area?.features || [];
-      if (area.length) {
-        html += sec("Area tergenang · PetaBencana 48 jam", "#3b82f6", area.length);
-        html += area.map((f) => {
-          const p = f.properties; rows.push({ kind: "area", f });
-          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:#3b82f626;color:#60a5fa">${icon("banjir")}</span>
-            <span class="item-main"><div class="item-title">${esc(p.nama)}</div>
-            <div class="item-sub">${esc(p.kota || "")}${p.kota ? " · " : ""}tinggi air ${esc(p.tinggi)} · ${esc(ago(p.waktu))}</div></span></button>`;
-        }).join("");
+      if (tab === "waspada") {
+        html += waspada.length ? waspada.map((f) => {
+          const p = f.properties; rows.push({ kind: "waspada", f });
+          const kab = (p.kabupaten_list || []).slice(0, 3).join(", ") + ((p.kabupaten_list || []).length > 3 ? ` +${p.kabupaten_list.length - 3}` : "");
+          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${WARNA_WASPADA}26;color:${WARNA_WASPADA}">${icon("banjir")}</span>
+            <span class="item-main"><div class="item-title">${esc(p.provinsi || "Peringatan")}</div>
+            <div class="item-sub">${esc(kab || "")}${kab ? " · " : ""}hingga ${esc(jamWIB(p.berakhir))} (${esc(sisa(p.berakhir))})</div></span></button>`;
+        }).join("") : `<div class="sec-note">Tidak ada peringatan hujan lebat aktif saat ini.</div>`;
+      } else if (tab === "terjadi") {
+        html += sec("Banjir terjadi · laporan warga 7 hari", "#3ea6ff", terjadi.length);
+        html += terjadi.length ? terjadi.map((f) => {
+          const p = f.properties; rows.push({ kind: "terjadi", f });
+          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:#3ea6ff26;color:#3ea6ff">${icon("banjir")}</span>
+            <span class="item-main"><div class="item-title">${esc(where(p) || "Lokasi")}</div>
+            <div class="item-sub">${esc(ago(p.waktu))}${p.teks ? ` · <span class="asli">${esc(p.teks.slice(0, 90)) + (p.teks.length > 90 ? "…" : "")}</span>` : ""}</div>
+            ${p.n_berita ? `<span class="item-news">${icon("berita")} ${p.n_berita} berita</span>` : ""}</span></button>`;
+        }).join("") : `<div class="sec-note">Belum ada laporan banjir dari warga.</div>`;
+        { const sA = seksiLaporan(["angin kencang"], "Angin kencang · laporan warga 7 hari", rows, i); i = rows.length; html += sA; }
+        if (area.length) {
+          html += sec("Area tergenang · PetaBencana 48 jam", "#3b82f6", area.length);
+          html += area.map((f) => {
+            const p = f.properties; rows.push({ kind: "area", f });
+            return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:#3b82f626;color:#60a5fa">${icon("banjir")}</span>
+              <span class="item-main"><div class="item-title">${esc(p.nama)}</div>
+              <div class="item-sub">${esc(p.kota || "")}${p.kota ? " · " : ""}tinggi air ${esc(p.tinggi)} · ${esc(ago(p.waktu))}</div></span></button>`;
+          }).join("");
+        }
+      } else {
+        html += resmi.length ? resmi.map((f) => {
+          const p = f.properties; rows.push({ kind: "resmi", f });
+          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${WARNA_BNPB}22;color:${WARNA_BNPB};font-size:11px">BNPB</span>
+            <span class="item-main"><div class="item-title">${esc(p.kabupaten || p.kabupaten_bnpb)}</div>
+            <div class="item-sub">${esc(tglID(p.tanggal))} · ${esc(p.kategori)}${p.rumah_terendam ? ` · ${num(p.rumah_terendam)} rumah terendam` : ""}${p.mengungsi ? ` · ${num(p.mengungsi)} mengungsi` : ""}</div></span></button>`;
+        }).join("") + `<div class="sec-note">Data resmi diperbarui mingguan, bisa tertinggal beberapa hari.</div>`
+          : `<div class="sec-note">Belum ada kejadian banjir tercatat BNPB minggu ini.</div>`;
       }
     } else if (t === "gunung_api") {
       const semua = state.data.gunung_api?.features || [];
@@ -1019,6 +1368,7 @@
             ${nb ? `<span class="item-news">${icon("berita")} ${nb} berita</span>` : ""}</span></button>`;
         }).join("");
       }
+      { const sG = seksiLaporan(["gunung api"], "Laporan warga · 7 hari", rows, i); i = rows.length; html += sG; }
       const normal = semua.filter((f) => f.properties.level === 1).length;
       html += normal ? `<div class="sec-note" style="margin-top:10px">${num(normal)} gunung lain berstatus Normal (segitiga hijau di peta).</div>` : "";
       const daki = semua.filter((f) => f.properties.level === 0).sort((a, b) => a.properties.nama.localeCompare(b.properties.nama));
@@ -1032,20 +1382,12 @@
             <div class="item-sub">${esc(p.lokasi || where(p))}${p.elevasi ? ` · ${num(p.elevasi)} mdpl` : ""}</div></span></button>`;
         }).join("");
       }
-    } else {
-      rows = state.data.laporan.features.filter((f) => state.jenis === "semua" || f.properties.jenis === state.jenis);
-      html = rows.map((f, i) => {
-        const p = f.properties, c = jWarna(p.jenis);
-        return `<button class="item" data-i="${i}" style="--i:${i}"><span class="badge" style="background:${c}26;color:${c}">${jIcon(p.jenis)}</span>
-          <span class="item-main"><div class="item-title"><span class="tag">${esc(p.jenis)}</span> ${esc(where(p) || "")}</div>
-          <div class="item-sub">${esc(ago(p.waktu))}${p.teks ? " · " + esc(p.teks.slice(0, 110)) + (p.teks.length > 110 ? "…" : "") : ""}</div>
-          ${p.n_berita ? `<span class="item-news">${icon("berita")} ${p.n_berita} berita</span>` : ""}</span></button>`;
-      }).join("");
     }
     list.innerHTML = html || `<div class="empty">Belum ada data untuk saat ini.</div>`;
     list.scrollTop = 0;
     list.querySelectorAll(".item").forEach((el) => el.addEventListener("click", () => {
       const r = rows[+el.dataset.i];
+      if (r?.kind === "lapor") return focusFeature("laporan", r.f);
       if (t === "titik_panas") focusRegion(r.p.wilayah_id);
       else if (t === "banjir") {
         if (r.kind === "waspada") focusWarning(r.f);
@@ -1234,7 +1576,7 @@
   // Geser peta sedikit bila popup keluar dari area aman
   function fitPopup() {
     const el = state.popup?.getElement();
-    if (!el) return;
+    if (!el || KARTU) return;   // kartu: popup sudah tetap di bawah, peta jangan digeser
     // Jangan geser di tengah animasi kamera (akan saling menimpa): tunggu sampai berhenti
     if (map.isMoving()) { map.once("moveend", () => setTimeout(fitPopup, 0)); return; }
     updatePopMax();
@@ -1291,7 +1633,7 @@
     tabs = tabs.filter(Boolean);
     if (!tabs.length) return "";
     return `<div class="ptabs">${tabs.map((t) => `<button class="ptab" data-t="${t.id}" aria-expanded="${t.id === buka}">${t.ic ? icon(t.ic) : ""}${esc(t.label)}${t.n != null ? ` <b>${num(t.n)}</b>` : ""}</button>`).join("")}</div>` +
-      tabs.map((t) => `<div class="ppane" data-t="${t.id}"${t.id === buka ? "" : " hidden"}>${t.html}</div>`).join("");
+      tabs.map((t) => `<div class="ppane" data-t="${t.id}"${t.id === buka ? "" : " hidden"}>${t.html}${t.src ? `<div class="src">${t.src}</div>` : ""}</div>`).join("");
   }
   document.addEventListener("click", (e) => {
     const ig = e.target.closest && e.target.closest(".ms-ig");
@@ -1318,18 +1660,18 @@
         <dt>Keyakinan</dt><dd>${esc(p.keyakinan)}</dd>
         <dt>Satelit</dt><dd>${esc(p.satelit)}${p.siang === true || p.siang === "true" ? " · siang" : " · malam"}</dd>
         ${p.frp != null ? `<dt>Daya api</dt><dd>${esc(p.frp)} MW (FRP)</dd>` : ""}</dl>
+        <div class="src">Sumber: satelit NASA FIRMS. Titik panas = deteksi panas, belum tentu kebakaran.</div>
         ${(() => { const bl = beritaApi(p.wilayah_id); return tabsHTML([{ id: "b", ic: "berita", label: "Berita karhutla", n: bl.length,
-          html: newsHTML(bl, `Belum ada berita kebakaran hutan/lahan di ${p.kabupaten || "wilayah ini"} (3 hari terakhir).`) }]); })()}
-        <div class="src">Titik panas = deteksi panas satelit, belum tentu kebakaran.</div></div>`;
+          html: newsHTML(bl, `Belum ada berita kebakaran hutan/lahan di ${p.kabupaten || "wilayah ini"} (3 hari terakhir).`) }]); })()}</div>`;
     } else {
       const foto = safeUrl(p.foto), link = safeUrl(p.tautan);
       html = `<div class="pop"><h3><span class="hi" style="--c:${jWarna(p.jenis)}">${jIcon(p.jenis)}</span>Laporan ${esc(p.jenis)}</h3>
         <div class="sub">${esc(ago(p.waktu))} · ${esc(fmtWIB(p.waktu))}<br>${esc(where(p) || "")}</div>
         ${tabsHTML([{ id: "d", label: "Detail", html: `
-          ${p.teks ? `<div>${esc(p.teks)}</div>` : ""}
+          ${p.teks ? `<div class="asli">${esc(p.teks)}</div>` : ""}
           ${p.tinggi_air_cm ? `<dl style="margin-top:6px"><dt>Tinggi air</dt><dd>${esc(p.tinggi_air_cm)} cm</dd></dl>` : ""}
-          ${foto ? `<img src="${esc(foto)}" alt="Foto laporan warga" loading="lazy" onerror="this.remove()" onload="this.closest('.maplibregl-popup') && window.dispatchEvent(new Event('pop-resize'))">` : ""}
-          <div class="src">Laporan warga via PetaBencana.id${link ? ` · <a href="${esc(link)}" target="_blank" rel="noopener">lihat</a>` : ""}</div>` },
+          ${foto ? `<img src="${esc(foto)}" alt="Foto laporan warga" loading="lazy" onerror="this.remove()" onload="this.closest('.maplibregl-popup') && window.dispatchEvent(new Event('pop-resize'))">` : ""}`,
+          src: `Sumber: laporan warga via PetaBencana.id${link ? ` · <a href="${esc(link)}" target="_blank" rel="noopener">lihat laporan</a>` : ""}` },
           { id: "b", ic: "berita", label: "Berita", n: (state.berita[p.id]?.berita || []).length, html: beritaListHTML(p.id) }], "d")}</div>`;
     }
     popupAt(lngLat, html, null, anchor);
@@ -1448,7 +1790,8 @@
       <dl><dt>Lokasi</dt><dd>${esc(p.lokasi || "-")}</dd>
       <dt>Kedalaman</dt><dd>${esc(p.kedalaman_km ?? "?")} km</dd>
       ${p.potensi ? `<dt>Potensi</dt><dd>${esc(p.potensi)}</dd>` : ""}</dl>
-      ${tabsHTML([{ id: "d", label: "Detail guncangan", html: `
+      <div class="src">Sumber: ${esc(p.sumber || "BMKG")}</div>
+      ${tabsHTML([{ id: "d", label: "Detail guncangan", src: "Radius guncangan: perkiraan kasar dari magnitudo &amp; kedalaman (rumus atenuasi Allen dkk. 2012), bukan pengukuran. Dirasakan &amp; peta guncangan: BMKG.", html: `
       ${p.kabupaten || p.dirasakan ? `<dl style="margin-bottom:8px">
         ${p.kabupaten ? `<dt>Wilayah</dt><dd>${esc(where(p))}</dd>` : ""}
         ${p.dirasakan ? `<dt>Dirasakan</dt><dd>${esc(p.dirasakan)} <span style="color:var(--muted)">(laporan BMKG)</span></dd>` : ""}</dl>` : ""}
@@ -1457,7 +1800,8 @@
         : `<div class="nm">Diperkirakan <b>tidak terasa</b> di permukaan${(p.kedalaman_km || 0) >= 100 ? ` — pusat gempa sangat dalam (${esc(p.kedalaman_km)} km)` : " — magnitudo kecil"}${p.dirasakan ? "" : ", dan BMKG tidak mencatatnya sebagai gempa dirasakan"}.</div>`}
       ${shake ? `<div class="nm" style="margin-top:6px"><a href="${esc(shake)}" target="_blank" rel="noopener">Peta guncangan BMKG</a></div>` : ""}` },
       { id: "b", ic: "berita", label: "Berita", n: beritaGempa(p).length,
-        html: newsHTML(beritaGempa(p), (p.magnitudo || 0) >= 4.5 || p.dirasakan ? "Belum ada berita media untuk gempa ini." : "Gempa kecil ini jarang diberitakan media.") }])}</div>`;
+        html: newsHTML(beritaGempa(p), (p.magnitudo || 0) >= 4.5 || p.dirasakan ? "Belum ada berita media untuk gempa ini." : "Gempa kecil ini jarang diberitakan media.") },
+      { id: "m", ic: "lapor", label: "Medsos", html: medsosGempaHTML(p) }])}</div>`;
 
     const owner = `${p.waktu}|${lng}|${lat}`;
     state.ringsOwner = owner;
@@ -1471,7 +1815,7 @@
       if (state.ringsOwner !== owner) return; // sudah diganti gempa lain
       // Desktop: tutup popup = hapus lingkaran. HP: lingkaran tetap tampil sampai gempa lain diklik.
       popupAt({ lng, lat }, html, () => { if (!isMobile()) clearRings(owner); });
-      map.fitBounds(b, { padding: viewPadding(), maxZoom: 9, duration: REDUCED ? 0 : fly === false ? 700 : 1100 });
+      if (!KARTU) map.fitBounds(b, { padding: viewPadding(), maxZoom: 9, duration: REDUCED ? 0 : fly === false ? 700 : 1100 });
     }, 0);
   }
 
@@ -1485,10 +1829,10 @@
       <div class="sub">${esc(p.provinsi || "")} · berlaku hingga ${esc(jamWIB(p.berakhir))} (${esc(sisa(p.berakhir))})</div>
       <dl>${kabs.length ? `<dt>Wilayah</dt><dd>${esc(kabs.slice(0, 6).join(", "))}${kabs.length > 6 ? ` +${kabs.length - 6}` : ""}</dd>` : ""}
       ${p.dampak ? `<dt>Dampak</dt><dd>${esc(p.dampak)}</dd>` : ""}</dl>
-      ${tabsHTML([kec.length ? { id: "k", label: "Kecamatan", n: kec.length, html: `<div class="chips-mini">${kec.map((k) => `<span>${esc(k)}</span>`).join("")}</div>` } : null,
+      <div class="src">Sumber: peringatan dini cuaca BMKG — <b>potensi</b>, bukan banjir pasti.${info ? ` <a href="${esc(info)}" target="_blank" rel="noopener">Infografis BMKG</a>` : ""}</div>
+      ${tabsHTML([kec.length ? { id: "k", label: "Kecamatan", n: kec.length, html: `<div class="chips-mini">${kec.map((k) => `<span>${esc(k)}</span>`).join("")}</div>`, src: "Sumber: BMKG" } : null,
         { id: "b", ic: "berita", label: "Berita banjir", n: beritaBmkg(p.provinsi).length,
-          html: newsHTML(beritaBmkg(p.provinsi), `Belum ada berita banjir di ${p.provinsi || "provinsi ini"} (36 jam terakhir).`) }])}
-      <div class="src">Peringatan dini cuaca BMKG — <b>potensi</b>, bukan banjir pasti.${info ? ` <a href="${esc(info)}" target="_blank" rel="noopener">Infografis BMKG</a>` : ""}</div></div>`);
+          html: newsHTML(beritaBmkg(p.provinsi), `Belum ada berita banjir di ${p.provinsi || "provinsi ini"} (36 jam terakhir).`) }])}</div>`);
   }
   function showBnpbPopup(wilayahId, lngLat) {
     const evs = state.data.banjir_bnpb.features.filter((x) => x.properties.wilayah_id === wilayahId);
@@ -1504,12 +1848,12 @@
         </div>`; }).join("")}
       ${(() => {
         const kron = evs.filter((e) => e.properties.kronologis || e.properties.kondisi).map((e) => { const p = e.properties;
-          return `<div class="sec-h">${esc(tglID(p.tanggal))}</div>${p.kronologis ? `<div>${esc(p.kronologis)}</div>` : ""}${p.kondisi ? `<div class="nm" style="margin:6px 0 8px">${esc(p.kondisi)}</div>` : ""}`; }).join("");
+          return `<div class="sec-h">${esc(tglID(p.tanggal))}</div>${p.kronologis ? `<div class="asli">${esc(p.kronologis)}</div>` : ""}${p.kondisi ? `<div class="nm asli" style="margin:6px 0 8px">${esc(p.kondisi)}</div>` : ""}`; }).join("");
         const bl = evs.flatMap((e) => beritaBnpb(e.properties.id));
-        return tabsHTML([kron ? { id: "k", label: "Kronologi", html: kron } : null,
+        return `<div class="src">Sumber: BNPB (Kejadian Bencana Mingguan) — bisa tertinggal beberapa hari.</div>` +
+          tabsHTML([kron ? { id: "k", label: "Kronologi", html: kron, src: "Sumber: BNPB" } : null,
           { id: "b", ic: "berita", label: "Berita", n: bl.length, html: newsHTML(bl, "Belum ada berita media untuk kejadian ini.") }]);
-      })()}
-      <div class="src">Sumber: BNPB (Kejadian Bencana Mingguan) — bisa tertinggal beberapa hari.</div></div>`);
+      })()}</div>`);
   }
   function boundsOf(coordsList) {
     const b = new maplibregl.LngLatBounds(coordsList[0], coordsList[0]);
@@ -1587,8 +1931,8 @@
   // Kategori ISPU (Permen LHK P.14/2020). Warna = palet What'sUpIndonesia, sama untuk heatmap, stasiun, popup & legenda.
   const ISPU_RESMI = [
     { maks: 50, nama: "Baik", warna: "#22c55e", saran: "Udara bersih, aman untuk aktivitas luar ruangan." },
-    { maks: 100, nama: "Sedang", warna: "#facc15", saran: "Masih dapat diterima. Kelompok sensitif kurangi aktivitas berat di luar." },
-    { maks: 200, nama: "Tidak sehat", warna: "#fb923c", saran: "Kurangi aktivitas luar ruangan; pakai masker bila perlu keluar." },
+    { maks: 100, nama: "Sedang", warna: "#fbbf24", saran: "Masih dapat diterima. Kelompok sensitif kurangi aktivitas berat di luar." },
+    { maks: 200, nama: "Tidak sehat", warna: "#f97316", saran: "Kurangi aktivitas luar ruangan; pakai masker bila perlu keluar." },
     { maks: 300, nama: "Sangat tidak sehat", warna: "#ef4444", saran: "Hindari aktivitas luar ruangan; tutup jendela." },
     { maks: Infinity, nama: "Berbahaya", warna: "#a855f7", saran: "Tetap di dalam ruangan. Kelompok sensitif cari ruangan berudara bersih." },
   ];
@@ -1614,9 +1958,14 @@
   // Warna berganti tepat di sekitar batas kategori ISPU (15,5 · 55,4 · 150,4 · 250,4 µg/m³),
   // jadi warna heatmap = warna stasiun & legenda untuk kategori yang sama.
   const GRADASI_PM = [
-    [0, [34, 197, 94], 0], [5, [34, 197, 94], 0.06], [12, [34, 197, 94], 0.2], [19, [250, 204, 21], 0.32],
-    [50, [250, 204, 21], 0.4], [61, [251, 146, 60], 0.5], [140, [251, 146, 60], 0.58], [162, [239, 68, 68], 0.66],
-    [240, [239, 68, 68], 0.7], [262, [168, 85, 247], 0.78],
+    // [PM2.5 µg/m³, warna, kepekatan]. Batas kategori ISPU: 15,5 · 55,4 · 150,4 · 250,4 µg/m³.
+    // Tiap kategori bergradasi di dalamnya (makin pekat = makin buruk) dan antar-kategori dibuat kontras:
+    // hijau → kuning muda → amber | oranye → oranye tua | merah → merah tua | ungu
+    [0, [34, 197, 94], 0], [5, [34, 197, 94], 0.3], [15, [74, 222, 128], 0.45],
+    [17, [253, 224, 71], 0.68], [54, [245, 158, 11], 0.76],
+    [57, [251, 113, 33], 0.78], [148, [234, 88, 12], 0.82],
+    [153, [239, 68, 68], 0.82], [248, [153, 27, 27], 0.86],
+    [253, [168, 85, 247], 0.88], [400, [126, 34, 206], 0.9],
   ];
   function warnaPM(v) {
     const g = GRADASI_PM;
@@ -1749,6 +2098,7 @@
     const K = olahUdara(), M = K.M, g = M.jam[K.h], W = K.cw, H = K.ch;
     const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
     const cx = cv.getContext("2d"), img = cx.createImageData(W, H), pudar = 2 * M.dx;
+    const kuat = state.tema === "gelap" ? 0.8 : 1;   // peta dasar gelap: warna sedikit lebih tipis agar jalan & batas tetap terlihat
     for (let y = 0; y < H; y++) {
       const lat = M.y0 - y * KOREKSI_RES;
       for (let x = 0; x < W; x++) {
@@ -1757,7 +2107,7 @@
         const [r, gg, b, a] = warnaPM(s.v * Math.exp(K.kor[y * W + x])), o = (y * W + x) * 4;
         // tepi kotak data memudar, juga ke arah laut lepas yang tidak punya data
         const tepi = mulus(Math.min(1, Math.min(lon - M.x0, M.xE - lon, M.y0 - lat, lat - M.yS) / pudar)) * mulus(Math.min(1, s.cov));
-        img.data[o] = r; img.data[o + 1] = gg; img.data[o + 2] = b; img.data[o + 3] = Math.round(a * tepi * 255);
+        img.data[o] = r; img.data[o + 1] = gg; img.data[o + 2] = b; img.data[o + 3] = Math.round(a * kuat * tepi * 255);
       }
     }
     blurRGBA(img.data, W, H, 3);
@@ -1769,6 +2119,7 @@
     if (btn) btn.setAttribute("aria-pressed", String(state.udara));
     const leg = $("#legenda-udara");
     if (leg) leg.hidden = !state.udara;
+    document.body.classList.toggle("udara-on", !!state.udara);
     if (!state.mapReady || !map.getSource("udara-img")) return;
     const ada = !!state.udaraData && state.udara;
     if (ada) {
@@ -2374,12 +2725,22 @@
   function wireSetelan() {
     $("#setelan-btn").addEventListener("click", () => bukaSetelan(!panelTerbuka(), "setelan"));
     $("#sumber-btn").addEventListener("click", () => bukaSetelan(true, "sumber"));
+    $("#panduan-btn").addEventListener("click", () => { bukaSetelan(false); setTimeout(() => mulaiPanduan(true), 150); });
     $("#sumber-kembali").addEventListener("click", () => bukaSetelan(true, "setelan"));
     $("#segar-btn").addEventListener("click", segarkan);
     document.querySelectorAll(".seg-btn[data-tema]").forEach((b) => b.addEventListener("click", () => {
       if (b.dataset.tema !== state.tema) { setTema(b.dataset.tema); lacak("Ganti tema", { tema: b.dataset.tema }); }
     }));
     tandaiTema();
+    document.querySelectorAll(".seg-btn[data-bahasa]").forEach((b) => {
+      b.setAttribute("aria-checked", String(b.dataset.bahasa === BAHASA));
+      b.addEventListener("click", () => {
+        if (b.dataset.bahasa === BAHASA) return;
+        simpan("wui-bahasa", b.dataset.bahasa);
+        lacak("Ganti bahasa", { bahasa: b.dataset.bahasa });
+        location.reload();
+      });
+    });
     $("#pasang-btn").addEventListener("click", pasangAplikasi);
     // klik di luar kotak judul = tutup pengaturan
     document.addEventListener("pointerdown", (e) => {
@@ -2417,13 +2778,14 @@
       ${daki ? `<div class="nm">Tidak termasuk gunung api yang dipantau PVMBG, jadi tidak ada status level aktivitas.</div>`
         : p.level >= 2 ? "" : `<div class="nm">Status Normal: tidak ada peningkatan aktivitas yang dilaporkan.</div>`}
       ${tabsHTML([
-        { id: "k", ic: "gunung", label: "Kondisi", html: kondisiHTML(f) },
-        lap ? { id: "l", label: "Laporan", html: `${p.periode ? `<div class="nm" style="margin-bottom:6px">${esc(p.periode)}</div>` : ""}${lap}` } : null,
-        rek ? { id: "r", label: "Rekomendasi", html: rek } : null,
+        { id: "k", ic: "gunung", label: "Kondisi", html: kondisiHTML(f),
+          src: `Cuaca puncak: model Open-Meteo · titik panas: NASA FIRMS · gempa: BMKG${daki ? " · lokasi &amp; ketinggian: OpenStreetMap" : " · level: MAGMA Indonesia (PVMBG)"}` },
+        lap ? { id: "l", label: "Laporan", html: `${p.periode ? `<div class="nm" style="margin-bottom:6px">${esc(p.periode)}</div>` : ""}${lap}`,
+          src: `Sumber: MAGMA Indonesia (PVMBG, Badan Geologi)${url ? ` · <a href="${esc(url)}" target="_blank" rel="noopener">laporan lengkap</a>` : ""}` } : null,
+        rek ? { id: "r", label: "Rekomendasi", html: rek, src: "Sumber: PVMBG via MAGMA Indonesia" } : null,
         p.level >= 2 ? { id: "b", ic: "berita", label: "Berita", n: bl.length, html: newsHTML(bl, `Belum ada berita tentang Gunung ${p.nama} (3 hari terakhir).`) } : null,
         { id: "m", ic: "lapor", label: "Medsos", html: medsosHTML(p) },
-      ], buka)}
-      <div class="src">${daki ? "Lokasi & ketinggian: OpenStreetMap" : `Sumber: MAGMA Indonesia (PVMBG, Badan Geologi)${url ? ` · <a href="${esc(url)}" target="_blank" rel="noopener">laporan lengkap</a>` : ""}`}</div></div>`);
+      ], buka)}</div>`);
   }
   const judulGunung = (p) => (/^Puncak\b/.test(p.nama) ? esc(p.nama) : `Gunung ${esc(p.nama)}`);
   // ---------- kondisi gunung untuk pendaki / trail runner ----------
@@ -2465,7 +2827,7 @@
     if (!el) return;
     if (!c) { el.innerHTML = `<div class="nm">Prakiraan cuaca gagal dimuat. Coba buka lagi nanti.</div>`; return; }
     const d = c.d, hari = (i) => i === 0 ? "Hari ini" : i === 1 ? "Besok"
-      : new Intl.DateTimeFormat("id-ID", { weekday: "long", timeZone: "UTC" }).format(new Date(d.time[i]));
+      : new Intl.DateTimeFormat(LOKAL, { weekday: "long", timeZone: "UTC" }).format(new Date(d.time[i]));
     el.innerHTML = d.time.map((_, i) => {
       const angin = Math.round(d.wind_gusts_10m_max[i]);
       return `<div class="cu-row"><span class="cu-hari">${hari(i)}</span>
@@ -2477,7 +2839,36 @@
   // Medsos: tombol ke hashtag Instagram gunung (foto & video dari pengunjung). Dibuka di aplikasi/akun IG pengguna sendiri.
   function medsosHTML(p) {
     const dasar = p.nama.split(" (")[0], tag = (/^Puncak\b/.test(dasar) ? dasar : `gunung${dasar}`).toLowerCase().replace(/[^a-z0-9]/g, "");
-    return `<div class="sec-h" style="margin-top:0">Foto &amp; video terbaru dari pendaki</div>
+    return `<div class="sec-h" style="margin-top:0">Foto &amp; Video Aktivitas Terbaru</div>
+      <a class="ms-btn ms-ig" href="https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/" target="_blank" rel="noopener noreferrer">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".6"/></svg>
+        Instagram</a>`;
+  }
+
+  // Medsos gempa: hashtag Instagram "#gempa<tempat>" agar pengunjung bisa melihat kondisi lokasi
+  // dari unggahan warga. Hanya tautan keluar (dibuka di aplikasi/akun pengguna sendiri), tidak ada API/data yang diambil.
+  // Arah di depan nama tempat, BMKG ("BaratDaya", "barat daya", "Tenggara") maupun USGS ("ENE of"), tanpa peduli huruf besar/kecil
+  const ARAH_LOKASI = /^\d+(?:[.,]\d+)?\s*km\s+(?:(?:barat|timur)\s*(?:laut|daya)|utara|selatan|timur|barat|tenggara|[nsew]{1,3})(?:\s+of)?\s+/i;
+  // Nama tempat dari teks lokasi gempa (null bila tak terurai):
+  // "Pusat gempa berada di laut 49 km timur laut Ruteng, Manggarai" -> "Ruteng"; "130 km BaratDaya MALUKUTENGGARA" -> "Maluku Tenggara";
+  // "114 km BaratDaya NIASBARAT-SUMUT" -> "Nias Barat"; "123 km ENE of Tobelo, Indonesia" -> "Tobelo"; "Banda Sea" -> "Banda Sea"
+  function namaTempatLokasi(s) {
+    const t = rapiLokasi(String(s || "").trim().replace(/^Pusat gempa berada di\s+(?:(?:laut|darat)\s+(?=\d))?/i, "")) || "";
+    const nama = t.replace(ARAH_LOKASI, "").split(",")[0].trim();
+    // sisa angka/"km" berarti format tak dikenal; "Indonesia" saja terlalu umum untuk pencarian
+    if (!nama || /\d|\bkm\b/i.test(nama) || /^indonesia$/i.test(nama)) return null;
+    return nama;
+  }
+  function tempatGempa(p) {
+    const bersih = (s) => String(s || "").replace(/^(?:Kab\.\s*|(?:Kabupaten|Kota)\s+)/i, "").trim();
+    if (p.kabupaten) return bersih(p.kabupaten);
+    // nama tempat dari lokasi; bila tak terurai (atau lokasi kosong), pakai provinsi
+    return bersih(namaTempatLokasi(p.lokasi)) || bersih(p.provinsi);
+  }
+  function medsosGempaHTML(p) {
+    const tempat = tempatGempa(p);
+    const tag = `gempa${tempat}`.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return `<div class="sec-h" style="margin-top:0">Foto &amp; Video Aktivitas Terbaru</div>
       <a class="ms-btn ms-ig" href="https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/" target="_blank" rel="noopener noreferrer">
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".6"/></svg>
         Instagram</a>`;
@@ -2596,6 +2987,9 @@
     const kab = [], prov = new Map();
     for (const f of geo.features) {
       const p = f.properties, g = f.geometry;
+      // "Kab. Danau" di data batas = kumpulan danau dari Sumatra s.d. Sulawesi (bukan kabupaten); kalau ikut,
+      // mencarinya (dan provinsi Sumatera Selatan) membuat peta memperkecil ke separuh Indonesia
+      if (p.nama === "Kab. Danau") continue;
       const polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
       let b = [180, 90, -180, -90];
       for (const poly of polys) for (const [x, y] of poly[0]) b = [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)];
@@ -2637,6 +3031,7 @@
   function pilihWilayah(e) {
     tutupCari();
     lacak("Cari", { tipe: e.tipe, hasil: e.nama || (e.f && e.f.properties.nama) || "" });
+    if (e.tipe === "tempat") return pilihTempat(e);
     if (e.tipe === "gunung") {   // langsung terbang ke gunung & buka tab Kondisi
       if (state.mode && state.mode !== "gunung_api") setMode(null);
       return focusVolcano(e.f, "k");
@@ -2645,7 +3040,7 @@
     const ids = new Set(e.tipe === "prov" ? e.ids : [e.id]);
     const bb = [[e.b[0], e.b[1]], [e.b[2], e.b[3]]];
     clearRings();
-    map.fitBounds(bb, { padding: viewPadding(), maxZoom: e.tipe === "prov" ? 8 : 10, duration: REDUCED ? 0 : 1100 });
+    map.fitBounds(bb, { padding: viewPadding(), maxZoom: e.tipe === "prov" ? 9 : 13, duration: REDUCED ? 0 : 1100 });
     const tengah = { lng: (e.b[0] + e.b[2]) / 2, lat: (e.b[1] + e.b[3]) / 2 };
     const sub = e.tipe === "prov" ? `Provinsi · ${num(e.ids.length)} kabupaten/kota` : `${e.tipe === "kota" ? "Kota" : "Kabupaten"} · ${e.provinsi}`;
     map.once("moveend", () => ringkasWilayah({ ids, judul: e.nama, sub, buka: true }, tengah));
@@ -2653,25 +3048,128 @@
   function renderHasilCari() {
     const box = $("#cari-hasil"), q = $("#cari-input").value;
     if (!state.indeks) { box.innerHTML = `<div class="cari-kosong">Memuat daftar wilayah…</div>`; return; }
+    if (!q.trim()) { state.cariHasil = []; box.innerHTML = `<div class="cari-kosong">Contoh: Bandung, Jawa Timur, Bromo, GBK, Kartini</div>`; return; }
     const hasil = cariWilayah(q);
-    state.cariHasil = hasil; state.cariAktif = 0;
-    if (!q.trim()) { box.innerHTML = `<div class="cari-kosong">Contoh: Bandung, Jawa Timur, Bromo, Lawu</div>`; return; }
-    if (!hasil.length) { box.innerHTML = `<div class="cari-kosong">"${esc(q)}" tidak ditemukan.</div>`; return; }
-    box.innerHTML = hasil.map((e, i) => {
+    const tempat = q.trim().length < 3 ? [] : CT.cache.get(kunciTempat(q));   // undefined = sedang dicari
+    if (tempat === undefined) jadwalCariTempat(q);
+    const semua = [...hasil, ...(tempat || [])];
+    state.cariHasil = semua; state.cariAktif = 0;
+    if (!semua.length) {
+      box.innerHTML = `<div class="cari-kosong">${tempat === undefined ? "Mencari…" : `"${esc(q)}" tidak ditemukan.`}</div>`;
+      return;
+    }
+    let i = 0;
+    box.innerHTML = hasil.map((e) => {
+      const sel = i === 0, k = i++;
       if (e.tipe === "gunung") {
         const p = e.f.properties, L = LEVEL_GUNUNG[p.level] || LEVEL_GUNUNG[1];
         const jenis = `${p.level === 0 ? "Gunung pendakian" : "Gunung api"} · ${p.lokasi || where(p)}`;
-        return `<button class="cari-item" role="option" data-i="${i}" aria-selected="${i === 0}">
+        return `<button class="cari-item" role="option" data-i="${k}" aria-selected="${sel}">
           <span class="ci-t"><b>${judulGunung(p)}</b><span>${esc(jenis)}</span></span>
           <span class="ci-n ci-lv" style="--c:${L.warna}">${p.level === 0 ? `${num(p.elevasi || 0)} mdpl` : `Level ${L.rom}`}</span></button>`;
       }
       const n = state.data.gempa ? jumlahKejadian(kejadianDi(new Set(e.tipe === "prov" ? e.ids : [e.id]))) : 0;
       const jenis = e.tipe === "prov" ? "Provinsi" : `${e.tipe === "kota" ? "Kota" : "Kabupaten"} · ${e.provinsi}`;
-      return `<button class="cari-item" role="option" data-i="${i}" aria-selected="${i === 0}">
+      return `<button class="cari-item" role="option" data-i="${k}" aria-selected="${sel}">
         <span class="ci-t"><b>${esc(e.nama)}</b><span>${esc(jenis)}</span></span>
         <span class="ci-n${n ? " ada" : ""}">${num(n)} kejadian</span></button>`;
-    }).join("");
-    box.querySelectorAll(".cari-item").forEach((b) => b.addEventListener("click", () => pilihWilayah(hasil[+b.dataset.i])));
+    }).join("") + (tempat === undefined ? `<div class="cari-sub">Mencari tempat…</div>`
+      : tempat.length ? `<div class="cari-sub">Tempat · OpenStreetMap</div>` + tempat.map((e) => {
+        const sel = i === 0, k = i++;
+        return `<button class="cari-item" role="option" data-i="${k}" aria-selected="${sel}">
+          <span class="ci-t"><b>${esc(e.nama)}</b><span>${esc([e.jenis, e.alamat].filter(Boolean).join(" · "))}</span></span>
+          <span class="ci-n">${icon("pin")}</span></button>`;
+      }).join("") : "");
+    box.querySelectorAll(".cari-item").forEach((b) => b.addEventListener("click", () => pilihWilayah(semua[+b.dataset.i])));
+  }
+
+  // ---------- pencarian tempat: kelurahan, kecamatan, tempat terkenal (GBK, Monas…) ----------
+  // Photon (komoot) = mesin cari berbasis OpenStreetMap, gratis & memang dibuat untuk kotak cari "sambil mengetik".
+  // Dipanggil hemat: minimal 3 huruf, jeda 350 ms setelah berhenti mengetik, hasil disimpan per kata kunci.
+  const PHOTON = "https://photon.komoot.io/api/";
+  const CT = { cache: new Map(), t: 0, ctrl: null };
+  const kunciTempat = (q) => q.trim().toLowerCase().replace(/\s+/g, " ");
+  const JENIS_TEMPAT = {
+    village: "Desa/kelurahan", suburb: "Kelurahan", neighbourhood: "Lingkungan", quarter: "Kawasan", hamlet: "Dusun",
+    town: "Kota kecil", city: "Kota", municipality: "Kecamatan", district: "Kecamatan", county: "Kabupaten",
+    island: "Pulau", islet: "Pulau", stadium: "Stadion", sports_centre: "Pusat olahraga", recreation_ground: "Kawasan olahraga",
+    park: "Taman", garden: "Taman", attraction: "Tempat wisata", museum: "Museum", monument: "Monumen", memorial: "Monumen",
+    viewpoint: "Tempat wisata", zoo: "Kebun binatang", theme_park: "Taman hiburan", beach: "Pantai", peak: "Puncak",
+    volcano: "Gunung", station: "Stasiun", halt: "Stasiun", aerodrome: "Bandara", university: "Kampus", college: "Kampus",
+    hospital: "Rumah sakit", mall: "Mal", marketplace: "Pasar", place_of_worship: "Tempat ibadah", golf_course: "Lapangan golf",
+    bay: "Teluk", lake: "Danau", water: "Danau", waterfall: "Air terjun", administrative: "Wilayah", castle: "Bangunan bersejarah",
+  };
+  // Buang hasil yang jarang dicari orang di peta bencana: halte, toko, rumah makan, dsb.
+  function tempatBerguna(p) {
+    const k = p.osm_key, v = p.osm_value;
+    // provinsi/kabupaten/kota sudah ada di daftar wilayah kita sendiri → jangan dobel
+    if (k === "boundary" || (k === "place" && ["country", "state", "province", "region", "county", "city"].includes(v))) return false;
+    if (k === "tourism" && ["hotel", "guest_house", "hostel", "motel", "apartment", "chalet", "information"].includes(v)) return false;
+    if (["place", "leisure", "tourism", "historic", "natural", "aeroway"].includes(k)) return v !== "yes" || k === "historic";
+    if (k === "railway") return v === "station" || v === "halt";
+    if (k === "amenity") return ["university", "college", "hospital", "marketplace", "place_of_worship"].includes(v);
+    if (k === "landuse") return v === "recreation_ground";
+    if (k === "shop") return v === "mall";
+    if (k === "highway") return p.type === "street" && !["bus_stop", "platform", "bus_station"].includes(v);
+    return false;
+  }
+  function jadwalCariTempat(q) {
+    clearTimeout(CT.t);
+    CT.t = setTimeout(async () => {
+      const kunci = kunciTempat(q);
+      if (CT.cache.has(kunci)) return;
+      CT.ctrl?.abort();
+      const ctrl = CT.ctrl = new AbortController();
+      let hasil = [];
+      try {
+        const c = map.getCenter();
+        const u = `${PHOTON}?q=${encodeURIComponent(q.trim())}&limit=15&lang=default&bbox=94.5,-11.5,141.5,6.5`
+          + `&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}&zoom=${Math.max(5, Math.round(map.getZoom()))}`;
+        const d = await fetch(u, { signal: ctrl.signal }).then((r) => (r.ok ? r.json() : { features: [] }));
+        const lihat = new Set();
+        for (const f of d.features || []) {
+          const p = f.properties || {};
+          if (!p.name || !tempatBerguna(p)) continue;
+          const alamat = [p.district || p.locality, p.city || p.county, p.state].filter((x, i, a) => x && x !== p.name && a.indexOf(x) === i).join(", ");
+          const kunciSama = `${p.name.toLowerCase()}|${alamat.toLowerCase()}`;
+          if (lihat.has(kunciSama)) continue;
+          lihat.add(kunciSama);
+          hasil.push({ tipe: "tempat", nama: p.name, alamat, c: f.geometry.coordinates, ext: p.extent || null,
+            jenis: p.osm_key === "highway" ? "Jalan" : JENIS_TEMPAT[p.osm_value] || "Tempat" });
+          if (hasil.length >= 6) break;
+        }
+      } catch (e) {
+        if (e.name === "AbortError") return;
+        hasil = [];
+      }
+      CT.cache.set(kunci, hasil);
+      if (!$("#cari").hidden && kunciTempat($("#cari-input").value) === kunci) renderHasilCari();
+    }, 350);
+  }
+  function pilihTempat(e) {
+    if (state.mode) setMode(null);
+    clearRings();
+    const [lng, lat] = e.c, durasi = REDUCED ? 0 : 1100;
+    if (e.ext) map.fitBounds([[e.ext[0], e.ext[3]], [e.ext[2], e.ext[1]]], { padding: viewPadding(), maxZoom: 16, duration: durasi });
+    else terbangKe([lng, lat], 15, 0, REDUCED ? { duration: 0 } : {});
+    map.once("moveend", () => showTempatPopup(e));
+  }
+  async function showTempatPopup(e) {
+    const [lng, lat] = e.c;
+    popupAt({ lng, lat }, `<div class="pop"><h3><span class="hi" style="--c:#3ea6ff">${icon("pin")}</span>${esc(e.nama)}</h3>
+      <div class="sub">${esc([e.jenis, e.alamat].filter(Boolean).join(" · "))}</div>
+      <div data-ringkas-tempat></div>
+      <div class="src">Lokasi: OpenStreetMap (pencarian Photon)</div></div>`);
+    try {
+      const w = wilayahTitik(await petaWilayah(), lng, lat);
+      const el = document.querySelector(".pop [data-ringkas-tempat]");
+      if (!w.wilayah_id || !el) return;
+      el.innerHTML = `<button type="button" class="lnk">Kejadian di ${esc(w.kabupaten)} ›</button>`;
+      el.querySelector("button").addEventListener("click", () => {
+        const sub = `${/^Kota\b/.test(w.kabupaten) ? "Kota" : "Kabupaten"} · ${w.provinsi}`;
+        ringkasWilayah({ ids: new Set([w.wilayah_id]), judul: w.kabupaten, sub, buka: true }, { lng, lat });
+      });
+    } catch { /* ringkasan wilayah opsional */ }
   }
   function bukaCari() {
     $("#cari").hidden = false;
@@ -2737,6 +3235,7 @@
     setTimeout(() => showRegionPopup(props, b.getCenter()), 0);
   }
 
+  $("#dock").addEventListener("animationend", () => updateCtrl());   // hitung ulang setelah dock selesai masuk
   function closeSheet() {
     $("#panel").classList.remove("open");
     $("#grip").setAttribute("aria-expanded", "false");
@@ -2747,7 +3246,10 @@
   function updateCtrl() {
     const set = () => {
       const dock = $("#dock"), panel = $("#panel"), H = window.innerHeight;
-      document.documentElement.style.setProperty("--dock-h", `${H - dock.getBoundingClientRect().top + 8}px`);
+      // tinggi dock dari ukuran aslinya (bukan posisi di layar): tidak terpengaruh animasi masuk dock
+      // (dulu tombol "Daftar …" bisa menumpuk ke dock bila dihitung saat dock masih bergeser turun)
+      const dockH = (parseFloat(getComputedStyle(dock).bottom) || 0) + dock.offsetHeight;
+      document.documentElement.style.setProperty("--dock-h", `${Math.round(dockH + 8)}px`);
       let topMost = dock.getBoundingClientRect().top;
       if (isMobile() && !panel.hidden) topMost = Math.min(topMost, panel.getBoundingClientRect().top);
       const show = $("#show-list");
@@ -2827,11 +3329,223 @@
   new ResizeObserver(updateTopUI).observe($("#brand"));
   $("#brand").addEventListener("animationend", updateTopUI);
 
+  // ---------- panduan singkat (tur) untuk pengunjung baru & fitur baru ----------
+  // Tiap langkah punya `id` tetap. Browser mengingat id yang sudah dilihat (localStorage "wui-panduan").
+  // Pengunjung baru: semua langkah. Pengunjung lama: hanya langkah yang belum pernah dilihat (= fitur baru),
+  // diberi label BARU. Cara menambah fitur baru: tambahkan satu objek di PANDUAN dengan id baru.
+  const PANDUAN = [
+    { id: "sambut", judul: "Selamat datang di What'sUpIndonesia",
+      teks: "Kejadian di Indonesia dalam satu peta. Ikuti panduan singkat ini, kurang dari 1 menit." },
+    { id: "ticker", el: () => $("#ticker"), judul: "Kabar terbaru",
+      teks: "Kabar penting berganti tiap beberapa detik. Ketuk untuk langsung melihatnya di peta." },
+    { id: "dock", el: () => $("#dock"), judul: "Lapisan kejadian",
+      teks: "Pilih Gempa, Titik panas, Banjir, atau Gunung untuk melihat daftar dan lokasinya. Ketuk titik di peta untuk detail, berita, dan sumber datanya." },
+    { id: "cari", el: () => $("#cari-btn"), judul: "Cari daerah & tempat",
+      teks: "Cari provinsi, kota, kelurahan, atau nama tempat. Peta langsung menuju ke sana." },
+    { id: "lapisan-cuaca", el: () => [$("#angin-btn"), $("#udara-btn")], judul: "Angin & kualitas udara",
+      teks: "Nyalakan animasi arah angin atau peta kualitas udara. Saat aktif, ketuk titik mana pun di peta untuk melihat detailnya." },
+    { id: "sembunyi", el: () => $("#sembunyi-btn"), judul: "Layer",
+      teks: "Untuk menyembunyikan semua titik kejadian." },
+    { id: "wilayah", judul: "Ringkasan per daerah", el: () => document.querySelector(".maplibregl-popup"),
+      teks: "Ketuk kabupaten atau kota mana pun di peta untuk melihat ringkasan kejadian dan berita di daerah itu, seperti contoh Kota Jakarta Pusat ini.",
+      masuk: contohWilayahMasuk, keluar: contohWilayahKeluar },
+    { id: "setelan", el: () => $("#setelan-btn"), judul: "Pengaturan",
+      teks: "Ganti tema terang/gelap, pasang situs ini di HP, dan lihat sumber data. Panduan ini bisa diputar lagi dari sini." },
+    { id: "segar", el: () => $("#segar-btn"), judul: "Muat ulang",
+      teks: "Ambil data dan versi situs terbaru kapan saja." },
+  ];
+  const TUR = { antre: [], i: 0, baru: false, root: null, aktif: null, kamera: null };
+  // Langkah dasar (sudah ada sebelum panduan dibuat). Pengunjung lama tanpa catatan panduan dianggap sudah tahu ini,
+  // jadi mereka hanya melihat langkah fitur yang lebih baru (Cari tempat, Layer, dst.).
+  const PANDUAN_DASAR = ["sambut", "ticker", "dock", "lapisan-cuaca", "wilayah", "setelan", "segar"];
+  async function contohWilayahMasuk() {
+    TUR.kamera = { center: map.getCenter(), zoom: map.getZoom() };
+    const e = (await indeksWilayah()).find((x) => x.nama === "Kota Jakarta Pusat");
+    if (!e || TUR.aktif?.id !== "wilayah") return;
+    await new Promise((selesai) => {
+      map.once("moveend", selesai); setTimeout(selesai, 2500);
+      map.fitBounds([[e.b[0], e.b[1]], [e.b[2], e.b[3]]], { padding: viewPadding(), maxZoom: 12, duration: REDUCED ? 0 : 1200 });
+    });
+    if (TUR.aktif?.id !== "wilayah") return;   // pengguna sudah pindah langkah saat peta terbang
+    ringkasWilayah({ ids: new Set([e.id]), judul: e.nama, sub: `Kota · ${e.provinsi}`, buka: true },
+      { lng: (e.b[0] + e.b[2]) / 2, lat: (e.b[1] + e.b[3]) / 2 });
+    [80, 400, 900].forEach((ms) => setTimeout(posisiPanduan, ms));   // popup menyesuaikan posisi peta sebentar
+  }
+  function contohWilayahKeluar() {
+    if (state.popup) state.popup.remove();
+    sorotWilayah(null);
+    if (TUR.kamera) { map.easeTo({ ...TUR.kamera, duration: REDUCED ? 0 : 800 }); TUR.kamera = null; }
+  }
+  function panduanDilihat() {
+    try { return new Set(JSON.parse(baca("wui-panduan") || "[]")); } catch { return new Set(); }
+  }
+  function tandaiPanduan(ids) {
+    const s = panduanDilihat();
+    ids.forEach((id) => s.add(id));
+    simpan("wui-panduan", JSON.stringify([...s]));
+  }
+  const tampakSatu = (el) => !!el && el.getClientRects().length > 0 && el.getBoundingClientRect().width > 0 && !el.closest("[hidden]");
+  const tampakEl = (el) => (Array.isArray(el) ? el.length > 0 && el.every(tampakSatu) : tampakSatu(el));
+  function kotakEl(el) {   // satu elemen, atau gabungan kotak beberapa elemen
+    if (!Array.isArray(el)) return el.getBoundingClientRect();
+    const k = el.map((e) => e.getBoundingClientRect());
+    const left = Math.min(...k.map((b) => b.left)), top = Math.min(...k.map((b) => b.top));
+    const right = Math.max(...k.map((b) => b.right)), bottom = Math.max(...k.map((b) => b.bottom));
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  }
+  // semua = putar ulang dari Pengaturan (semua langkah)
+  function mulaiPanduan(semua) {
+    if (TUR.root) return;
+    const dilihat = panduanDilihat();
+    TUR.baru = !semua && dilihat.size > 0;   // pengunjung lama → hanya fitur baru
+    TUR.antre = PANDUAN.filter((l) => semua || !dilihat.has(l.id)).filter((l) => !TUR.baru || l.id !== "sambut");
+    if (!TUR.antre.length) return;
+    if (state.popup) state.popup.remove();
+    tutupCari();
+    if (panelTerbuka()) bukaSetelan(false);
+    const d = document.createElement("div");
+    d.className = "tur"; d.setAttribute("role", "dialog"); d.setAttribute("aria-modal", "true"); d.setAttribute("aria-labelledby", "tur-judul");
+    d.innerHTML = `<div class="tur-sorot"></div>
+      <div class="tur-kartu"><div class="tur-atas"><span class="tur-no"></span><span class="tur-baru">BARU</span></div>
+        <h3 id="tur-judul"></h3><p class="tur-teks"></p>
+        <div class="tur-aksi"><button type="button" class="tur-lewati">Lewati</button><span class="tur-isi"></span>
+          <button type="button" class="tur-kembali">Kembali</button><button type="button" class="tur-lanjut">Lanjut</button></div></div>`;
+    document.body.appendChild(d);
+    TUR.root = d; TUR.i = 0;
+    d.querySelector(".tur-lewati").addEventListener("click", () => tutupPanduan("lewati"));
+    d.querySelector(".tur-kembali").addEventListener("click", () => langkahPanduan(TUR.i - 1, -1));
+    d.querySelector(".tur-lanjut").addEventListener("click", () => {
+      if (TUR.i >= TUR.antre.length - 1) tutupPanduan("selesai"); else langkahPanduan(TUR.i + 1, 1);
+    });
+    document.addEventListener("keydown", tombolPanduan, true);
+    window.addEventListener("resize", posisiPanduan);
+    map.on("move", posisiPanduan);   // sorotan ikut bergeser saat peta bergerak (peragaan)
+    langkahPanduan(0, 1);
+    d.querySelector(".tur-lanjut").focus();
+  }
+  function tombolPanduan(e) {
+    if (!TUR.root) return;
+    if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); tutupPanduan("lewati"); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); TUR.root.querySelector(".tur-lanjut").click(); }
+    else if (e.key === "ArrowLeft" && TUR.i > 0) { e.preventDefault(); langkahPanduan(TUR.i - 1, -1); }
+  }
+  // arah: lewati langkah yang tombolnya sedang tidak terlihat (mis. ticker kosong)
+  function langkahPanduan(i, arah) {
+    while (i >= 0 && i < TUR.antre.length && TUR.antre[i].el && !TUR.antre[i].masuk && !tampakEl(TUR.antre[i].el())) i += arah;
+    if (i < 0) return;
+    if (i >= TUR.antre.length) return tutupPanduan("selesai");
+    TUR.i = i;
+    const l = TUR.antre[i], r = TUR.root;
+    if (TUR.aktif && TUR.aktif !== l) TUR.aktif.keluar?.();
+    TUR.aktif = l;
+    tandaiPanduan([l.id]);
+    r.querySelector("#tur-judul").textContent = l.judul;
+    r.querySelector(".tur-teks").textContent = l.teks;
+    r.querySelector(".tur-no").textContent = TUR.antre.length > 1 ? `${i + 1} dari ${TUR.antre.length}` : "";
+    r.querySelector(".tur-baru").hidden = !TUR.baru;
+    r.querySelector(".tur-kembali").hidden = i === 0;
+    r.querySelector(".tur-lanjut").textContent = i === TUR.antre.length - 1 ? "Selesai" : "Lanjut";
+    posisiPanduan();
+    l.masuk?.();
+  }
+  function posisiPanduan() {
+    if (!TUR.root) return;
+    const l = TUR.antre[TUR.i], el = l.el?.(), sorot = TUR.root.querySelector(".tur-sorot"), kartu = TUR.root.querySelector(".tur-kartu");
+    const W = window.innerWidth, H = window.innerHeight, M = 16;
+    kartu.style.maxWidth = `${Math.min(340, W - 2 * M)}px`;
+    if (!el || !tampakEl(el)) {        // langkah tanpa tombol: kartu di tengah, layar digelapkan merata
+      TUR.root.classList.add("tanpa-sorot");
+      kartu.style.left = `${(W - kartu.offsetWidth) / 2}px`;
+      kartu.style.top = `${Math.max(M, (H - kartu.offsetHeight) / 2)}px`;
+      return;
+    }
+    TUR.root.classList.remove("tanpa-sorot");
+    const b = kotakEl(el), pad = 6;
+    Object.assign(sorot.style, { left: `${b.left - pad}px`, top: `${b.top - pad}px`, width: `${b.width + 2 * pad}px`, height: `${b.height + 2 * pad}px` });
+    const kw = kartu.offsetWidth, kh = kartu.offsetHeight;
+    // kartu di bawah tombol kalau muat; kalau tidak di atas; kalau tidak juga, di samping kiri (tombol peta di kanan)
+    let top, left = Math.min(W - M - kw, Math.max(M, b.left + b.width / 2 - kw / 2));
+    if (b.bottom + pad + 12 + kh <= H - M) top = b.bottom + pad + 12;
+    else if (b.top - pad - 12 - kh >= M) top = b.top - pad - 12 - kh;
+    else { top = Math.min(H - M - kh, Math.max(M, b.top + b.height / 2 - kh / 2)); left = Math.max(M, b.left - pad - 12 - kw); }
+    kartu.style.left = `${left}px`; kartu.style.top = `${top}px`;
+  }
+  function tutupPanduan(aksi) {
+    if (!TUR.root) return;
+    if (aksi === "lewati") tandaiPanduan(TUR.antre.map((l) => l.id));   // dilewati = dianggap sudah dilihat
+    lacak("Panduan", { aksi, langkah: TUR.i + 1, jenis: TUR.baru ? "fitur baru" : "lengkap" });
+    document.removeEventListener("keydown", tombolPanduan, true);
+    window.removeEventListener("resize", posisiPanduan);
+    map.off("move", posisiPanduan);
+    TUR.aktif?.keluar?.(); TUR.aktif = null;
+    TUR.root.remove(); TUR.root = null;
+  }
+  // Mulai otomatis setelah peta & data siap dan animasi pembuka selesai (sekali per kunjungan)
+  async function jadwalkanPanduan() {
+    if (new URLSearchParams(location.search).has("tanpa-panduan")) return;
+    if (!panduanDilihat().size && (PERNAH_DATANG || await SW_LAMA)) tandaiPanduan(PANDUAN_DASAR);
+    const tunggu = () => (state.mapReady && state.data.gempa ? setTimeout(() => mulaiPanduan(false), REDUCED ? 300 : 3200) : setTimeout(tunggu, 400));
+    tunggu();
+  }
+
+  // ---------- tautan langsung ke satu gempa ----------
+  // ?gempa=<waktu UTC, mis. 2026-11-18T03:24:03Z> membuka gempa itu (tautan di postingan Threads).
+  // ?kartu = tampilan bersih untuk screenshot otomatis (tanpa ticker, dock, tombol); <body data-siap> saat siap difoto.
+  const TAUTAN = new URLSearchParams(location.search);
+  const GEMPA_TAUTAN = TAUTAN.get("gempa");
+  if (TAUTAN.has("kartu")) document.body.classList.add("kartu");
+  async function bukaGempaTautan() {
+    if (!GEMPA_TAUTAN) return;
+    for (let i = 0; i < 60; i++) {   // gempa yang baru terjadi mungkin baru muncul setelah cek BMKG langsung
+      const f = state.mapReady && state.data.gempa?.features.find((x) => x.properties.waktu === GEMPA_TAUTAN);
+      if (f) {
+        if (state.mode !== "gempa") { state.mode = "gempa"; applyMode(false); }
+        if (TAUTAN.has("kartu") || isMobile()) setListHidden(true);
+        showQuake(f, false);
+        if (!TAUTAN.has("kartu")) return;
+        // kartu: hanya gempa yang dibahas, agar gempa lama di titik yang sama (mis. label M5.8) tidak mengecoh
+        const hanyaIni = ["==", ["get", "waktu"], GEMPA_TAUTAN];
+        map.setFilter("gempa", hanyaIni);
+        map.setFilter("gempa-label", ["all", hanyaIni, [">=", ["coalesce", ["get", "magnitudo"], 0], 5]]);
+        // Kartu: detail di bawah (CSS), peta zoom ke gempa di ruang atasnya, lalu tandai siap difoto
+        setTimeout(() => {
+          const pop = document.querySelector(".maplibregl-popup");
+          const bawah = (pop ? pop.offsetHeight : 260) + 40;
+          const [lng, lat] = f.geometry.coordinates;
+          const { rings } = ringRadii(f.properties);
+          const r = Math.max(rings.length ? Math.max(...rings.map((x) => x.km)) : 60, 70);   // min. 70 km: pulau sekitar ikut terlihat
+          // zoom agar lingkaran guncangan terbesar (min. 30 km) muat di ruang peta di atas kartu
+          const tinggi = Math.max(window.innerHeight - 90 - bawah, 120), lebar = window.innerWidth - 60;
+          const mPerPx = (2 * r * 1000) / Math.min(tinggi, lebar);
+          const zoom = Math.min(8.5, Math.log2((78271.52 * Math.cos(lat * Math.PI / 180)) / mPerPx));
+          map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
+          map.jumpTo({ center: [lng, lat], zoom });
+          // pusat gempa ke tengah ruang di atas kartu (posisi mutlak, aman bila terpanggil berulang)
+          const c = map.getCanvas();
+          map.jumpTo({ center: map.unproject([c.clientWidth / 2, c.clientHeight / 2 + (bawah - 90) / 2]) });
+          // titik gempa berdenyut terus, jadi peta tak pernah "idle": tunggu semua ubin peta termuat
+          let n = 0;
+          const cek = setInterval(() => {
+            if ((map.areTilesLoaded() && map.isStyleLoaded()) || ++n > 40) {
+              clearInterval(cek);
+              setTimeout(() => { document.body.dataset.siap = "1"; }, 1500);
+            }
+          }, 250);
+        }, 300);
+        return;
+      }
+      if (i % 10 === 9) { state.kunciAuto = null; cekGempaRealtime(); }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    document.body.dataset.siap = "tidak-ketemu";
+  }
+
   // ---------- mulai ----------
   state.mode = MODES[location.hash.slice(1)] ? location.hash.slice(1) : null;
   wireUI();
   applyMode(false);
-  loadLive().then(cekGempaRealtime);
+  loadLive().then(cekGempaRealtime).then(bukaGempaTautan);
+  jadwalkanPanduan();
   setInterval(async () => {
     // tab terbuka lama tanpa disentuh: muat ulang hanya bila ada versi baru & tidak ada popup yang sedang dibaca
     if (!state.popup && await adaVersiBaru()) return location.reload();
