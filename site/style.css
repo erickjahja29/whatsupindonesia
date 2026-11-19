@@ -439,6 +439,10 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
   transition: color .2s, background .2s, opacity .2s; }
 .maplibregl-ctrl-group .ctrl-udara:hover { opacity: 1; }
 .maplibregl-ctrl-group .ctrl-udara[aria-pressed="true"] { opacity: 1; color: #fff; background: #7c3aed; }
+.maplibregl-ctrl-group .ctrl-hujan { display: grid; place-items: center; font-size: 17px; color: var(--text); opacity: .8;
+  transition: color .2s, background .2s, opacity .2s; }
+.maplibregl-ctrl-group .ctrl-hujan:hover { opacity: 1; }
+.maplibregl-ctrl-group .ctrl-hujan[aria-pressed="true"] { opacity: 1; color: #fff; background: #0284c7; }
 /* Legenda polusi udara (muncul saat tombol aktif) */
 .legenda-udara { background: var(--glass); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--stroke); border-radius: 14px; padding: 9px 11px; color: var(--text); font-size: 11px;
@@ -555,4 +559,16 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
   .pop .news:hover, .chip:hover, .pop .ptab:hover, .icon-btn:hover { background: inherit; }
   .chip:hover { background: var(--card); }
   .chip[aria-pressed="true"]:hover { background: color-mix(in srgb, var(--c, #fff) 18%, transparent); }
+}
+
+/* Legenda hujan: daftar kelas + tombol putar/jeda animasi & jam citra satelit */
+.legenda-hujan .lh-bar { display: flex; align-items: center; gap: 6px; margin-top: 7px; padding-top: 6px;
+  border-top: 1px solid var(--line); color: var(--muted); }
+.legenda-hujan .lh-main { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); background: transparent;
+  color: inherit; font-size: 10px; line-height: 1; cursor: pointer; flex: none; padding: 0; }
+.legenda-hujan #lh-waktu { font-size: 11px; line-height: 1.25; }
+@media (max-width: 640px) {
+  .legenda-hujan .lh-bar { margin-top: 4px; padding-top: 4px; gap: 4px; }
+  .legenda-hujan #lh-waktu { font-size: 9.5px; max-width: 84px; }
+  .legenda-hujan li span { display: block; }   /* legenda hujan tidak punya batang gradasi: titik warna tetap tampil */
 }

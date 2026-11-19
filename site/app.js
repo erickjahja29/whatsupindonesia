@@ -23,6 +23,7 @@
     banjir: '<path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>',
     angin: '<path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/>',
     asap: '<path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9Z"/>',
+    hujan: '<path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="M16 14v6"/><path d="M8 14v6"/><path d="M12 16v6"/>',
     gunung: '<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>',
     berita: '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-4 0v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z"/>',
     pin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
@@ -189,9 +190,12 @@
       d.innerHTML = `<button type="button" id="angin-btn" class="ctrl-angin" aria-pressed="false" title="Angin: nyala/mati"
         aria-label="Lapisan angin">${icon("angin")}</button>
         <button type="button" id="udara-btn" class="ctrl-udara" aria-pressed="false" title="Polusi udara (PM2.5): nyala/mati"
-        aria-label="Lapisan polusi udara"><svg viewBox="0 0 24 24"><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="M16 17H7"/><path d="M17 21H9"/></svg></button>`;
+        aria-label="Lapisan polusi udara"><svg viewBox="0 0 24 24"><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="M16 17H7"/><path d="M17 21H9"/></svg></button>
+        <button type="button" id="hujan-btn" class="ctrl-hujan" aria-pressed="false" title="Hujan sekarang (satelit + bandara): nyala/mati"
+        aria-label="Lapisan hujan">${icon("hujan")}</button>`;
       d.querySelector("#angin-btn").addEventListener("click", () => { setAngin(!state.angin); if (state.angin) lacak("Nyalakan angin"); });
       d.querySelector("#udara-btn").addEventListener("click", () => { setUdara(!state.udara); if (state.udara) lacak("Nyalakan kualitas udara"); });
+      d.querySelector("#hujan-btn").addEventListener("click", () => { setHujan(!state.hujan); if (state.hujan) lacak("Nyalakan hujan"); });
       return d;
     }
     onRemove() { /* tidak dipakai */ }
@@ -202,7 +206,7 @@
   // MapLibre tidak mengulang ubin peta yang gagal diunduh (sinyal lemah / server sibuk), sehingga peta dasar
   // bisa tetap hitam. Bila ubin peta dasar gagal, muat ulang gaya peta (lapisan data dipasang ulang otomatis).
   const SUMBER_KITA = new Set(["wilayah", "titik_panas", "gempa", "laporan", "guncangan", "guncangan-label", "gelombang",
-    "peringatan", "gunung_api", "banjir_area", "angin", "udara-img", "ispu"]);
+    "peringatan", "gunung_api", "banjir_area", "angin", "udara-img", "ispu", "hujan-0", "hujan-1", "hujan-2", "hujan-3"]);
   const pulih = { gagal: 0, coba: 0, t: null };
   map.on("error", (e) => {
     if (e.sourceId ? SUMBER_KITA.has(e.sourceId) : map.isStyleLoaded()) return;
@@ -408,6 +412,13 @@
       layout: { visibility: state.udara ? "visible" : "none" },
       paint: { "raster-opacity": state.tema === "terang" ? 0.95 : 1, "raster-resampling": "linear", "raster-fade-duration": 0 } },
     "peringatan-fill");
+    // Hujan: 4 frame animasi (citra satelit dikoreksi bandara), hanya satu yang terlihat pada satu waktu
+    for (let k = 0; k < 4; k++) {
+      map.addSource(`hujan-${k}`, { type: "image", url: GAMBAR_KOSONG, coordinates: [[90, 21.9], [157.5, 21.9], [157.5, -21.9], [90, -21.9]] });
+      map.addLayer({ id: `hujan-${k}`, type: "raster", source: `hujan-${k}`, layout: { visibility: state.hujan ? "visible" : "none" },
+        paint: { "raster-opacity": 0, "raster-resampling": "linear", "raster-fade-duration": 0, "raster-opacity-transition": { duration: 0 } } },
+      "peringatan-fill");
+    }
     // Stasiun ISPU resmi KLH: bulatan berwarna kategori + angka ISPU
     map.addSource("ispu", { type: "geojson", data: empty });
     // Warna = palet yang sama dengan heatmap & legenda. Stasiun tanpa sensor PM2.5 = abu-abu pudar (tidak sebanding).
@@ -451,6 +462,7 @@
     applyMode(false);
     terapkanAngin();
     terapkanUdara();
+    terapkanHujan();
   });
 
   map.on("load", () => {
@@ -476,6 +488,7 @@
     applyMode(false);
     terapkanAngin();
     terapkanUdara();
+    terapkanHujan();
     // Intro: terbang dari jauh ke Indonesia
     setTimeout(() => map.fitBounds(INDONESIA, { padding: viewPadding(), duration: REDUCED ? 0 : 2600,
       curve: 1.6, essential: true }), REDUCED ? 0 : 250);
@@ -502,6 +515,7 @@
         getJSON("live/udara.json").catch(() => null),
         getJSON("live/ispu.geojson").catch(() => kosong),
       ]);
+      state.metarData = await getJSON("live/metar.json").catch(() => state.metarData || null);
       for (const f of gempa.features) f.properties.lokasi = rapiLokasi(f.properties.lokasi);
       gabungGempaRT(gempa);   // file statis bisa lebih lama dari data BMKG langsung: jangan sampai gempa baru hilang
       state.beritaGempa = bGempa;
@@ -534,7 +548,7 @@
       renderTicker();
       if (state.mode) { renderPanel(); applyListVisibility(); }
       updateCtrl();
-      if (state.mapReady) { applyToMap(); terapkanAngin(); terapkanUdara(); }
+      if (state.mapReady) { applyToMap(); terapkanAngin(); terapkanUdara(); terapkanHujan(); }
       state.firstLoad = false;
     } catch (e) {
       console.error(e);
@@ -1068,6 +1082,10 @@
       const layers = ["ispu", "gunung_api", "laporan", "banjir-lapor", "gempa", "titik_panas", "banjir-area-fill", "bnpb-fill",
         "peringatan-fill", "angin", "angin-hit", "wilayah-fill"].filter((id) => map.getLayoutProperty(id, "visibility") !== "none");
       const hits = map.queryRenderedFeatures(e.point, { layers });
+      // Hujan aktif: klik di mana saja (selain titik kejadian) = "di sini sedang hujan?"
+      if (state.hujan && HJ.frames.length && (!hits.length || hits[0].layer.id === "wilayah-fill")) {
+        clearRings(); return showRainPopup(e.lngLat, hits[0]?.properties);
+      }
       // Polusi udara aktif: klik di mana saja (selain titik kejadian) = kualitas udara di titik itu
       if (state.udara && state.udaraData && (!hits.length || hits[0].layer.id === "wilayah-fill")) {
         clearRings(); return showAirPopup(e.lngLat, hits[0]?.properties);
@@ -1768,6 +1786,7 @@
   }
   function setUdara(on) {
     state.udara = on;
+    if (on && state.hujan) setHujan(false);
     simpan("wui-udara", on ? "1" : "0");
     state.udaraKey = null;
     if (!on && state.popup && state.popupUdara) state.popup.remove();
@@ -1852,6 +1871,308 @@
     const { p, lngLat } = state.udaraWilayah;
     showRegionPopup(p, lngLat);
   });
+
+  // ---------- hujan: satelit Himawari (suhu puncak awan) dikoreksi pengamatan cuaca bandara (METAR) ----------
+  // 1) Citra inframerah Himawari (NASA GIBS, tiap 10 menit) → warna dikembalikan ke suhu puncak awan memakai palet resmi GIBS.
+  // 2) Suhu → perkiraan intensitas hujan (rumus Auto-Estimator, Vicente dkk. 1998): awan makin dingin/tinggi = hujan makin deras.
+  // 3) Dekat bandara, perkiraan satelit ditarik ke pengamatan bandara (bobot Gaussian menurut jarak, L = 15 km).
+  const HIMAWARI = "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Himawari_AHI_Band13_Clean_Infrared/default";
+  const PALET_IR = "https://gibs.earthdata.nasa.gov/colormaps/v1.3/Clean_Longwave_Infrared_Window_Band.xml";
+  const HJ_UBIN = { 4: { x: [12, 14], y: [7, 8] }, 5: { x: [24, 28], y: [15, 17] } };   // ubin peta yang menutupi Indonesia
+  const HJ_FRAME = 4, HJ_LANGKAH = 20, HJ_L_KM = 15, HJ_W0 = 0.25;
+  const HUJAN_KELAS = [
+    { min: 0.3, nama: "Gerimis / ringan", warna: [125, 211, 252], a: 0.55 },
+    { min: 1, nama: "Hujan ringan", warna: [56, 189, 248], a: 0.7 },
+    { min: 3, nama: "Hujan sedang", warna: [34, 197, 94], a: 0.8 },
+    { min: 8, nama: "Hujan lebat", warna: [250, 204, 21], a: 0.85 },
+    { min: 15, nama: "Sangat lebat", warna: [249, 115, 22], a: 0.9 },
+    { min: 30, nama: "Badai / ekstrem", warna: [239, 68, 68], a: 0.92 },
+  ];
+  state.hujan = baca("wui-hujan") === "1";
+  const HJ = { palet: null, warnaKe: new Map(), frames: [], i: 0, timer: 0, main: true, memuat: false, tTerbaru: null, cekT: 0, kunci: "" };
+  const latUbin = (y, z) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / 2 ** z))) * 180) / Math.PI;
+  const lonUbin = (x, z) => (x / 2 ** z) * 360 - 180;
+  function batasUbin(z) {
+    const u = HJ_UBIN[z], w = lonUbin(u.x[0], z), e = lonUbin(u.x[1] + 1, z), n = latUbin(u.y[0], z), s = latUbin(u.y[1] + 1, z);
+    return [[w, n], [e, n], [e, s], [w, s]];
+  }
+  const keUbinPx = (lng, lat, z) => {   // posisi piksel (pecahan) di kanvas gabungan ubin
+    const u = HJ_UBIN[z], n = 2 ** z * 256, r = (lat * Math.PI) / 180;
+    return [((lng + 180) / 360) * n - u.x[0] * 256, ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n - u.y[0] * 256];
+  };
+  async function paletIR() {
+    if (HJ.palet) return HJ.palet;
+    const xml = await fetch(PALET_IR).then((r) => r.text());
+    const daftar = [];
+    for (const m of xml.matchAll(/rgb="(\d+),(\d+),(\d+)"[^>]*?value="[([]?(-?[\d.]+),(-?[\d.]+|\+INF)/g)) {
+      const [r, g, b, lo] = m.slice(1, 5).map(Number), hi = m[5] === "+INF" ? lo + 1 : Number(m[5]);
+      daftar.push({ r, g, b, c: (lo + hi) / 2 });
+    }
+    // Palet GIBS memakai abu-abu di dua tempat: permukaan/awan hangat DAN puncak awan sangat dingin (±−75 °C).
+    // Ubin zoom rendah juga dihaluskan (warna campuran). Jadi: piksel abu-abu dibaca dari skala abu-abu hangat saja,
+    // piksel berwarna dari skala berwarna saja.
+    const abuHangat = daftar.filter((p) => p.r === p.g && p.g === p.b && p.c > -50).sort((a, b) => a.r - b.r);
+    HJ.abu = new Float32Array(256);
+    for (let v = 0; v < 256; v++) {
+      let best = abuHangat[0];
+      for (const p of abuHangat) if (Math.abs(p.r - v) < Math.abs(best.r - v)) best = p;
+      HJ.abu[v] = best.c;
+    }
+    HJ.palet = daftar.filter((p) => !(p.r === p.g && p.g === p.b));
+    for (const p of HJ.palet) HJ.warnaKe.set((p.r << 16) | (p.g << 8) | p.b, p.c);
+    return HJ.palet;
+  }
+  function suhuWarna(r, g, b) {
+    const k = (r << 16) | (g << 8) | b;
+    let c = HJ.warnaKe.get(k);                         // warna persis di palet berwarna: dipercaya
+    if (c !== undefined) return c;
+    const sat = Math.max(r, g, b) - Math.min(r, g, b);
+    // abu-abu, atau warna campuran pucat di tepi awan (hasil penghalusan ubin) = awan/permukaan hangat
+    if (sat < 70) return HJ.abu[(r + g + b) / 3 | 0];
+    {   // warna jenuh di luar palet: pakai warna palet terdekat, simpan hasilnya
+      let best = Infinity;
+      for (const p of HJ.palet) { const d = (p.r - r) ** 2 + (p.g - g) ** 2 + (p.b - b) ** 2; if (d < best) { best = d; c = p.c; } }
+      HJ.warnaKe.set(k, c);
+    }
+    return c;
+  }
+  // Auto-Estimator: R(mm/jam) = 1,1183e11 · exp(−3,6382e−2 · T^1,2), T dalam Kelvin; awan lebih hangat dari −23 °C dianggap tidak hujan
+  const hujanDariSuhu = (c) => { const K = c + 273.15; return K >= 250 ? 0 : Math.min(100, 1.1183e11 * Math.exp(-3.6382e-2 * K ** 1.2)); };
+  const urlUbin = (t, z, x, y) => `${HIMAWARI}/${t}/GoogleMapsCompatible_Level6/${z}/${y}/${x}.png`;
+  const isoMenit = (ms) => new Date(ms).toISOString().slice(0, 16) + ":00Z";
+  // Citra terbaru: GIBS menjawab 404 untuk jam yang belum tersedia → mundur 10 menit sampai ketemu
+  async function waktuTerbaru() {
+    if (HJ.tTerbaru && Date.now() - HJ.cekT < 5 * 60 * 1000) return HJ.tTerbaru;
+    let t = Math.floor(Date.now() / 600000) * 600000 - 20 * 60000;
+    for (let k = 0; k < 18; k++, t -= 600000) {
+      const r = await fetch(urlUbin(isoMenit(t), 4, 12, 8), { method: "HEAD" }).catch(() => null);
+      if (r && r.ok) { HJ.tTerbaru = t; HJ.cekT = Date.now(); return t; }
+    }
+    throw new Error("Citra Himawari tidak tersedia");
+  }
+  async function muatFrameHujan(t, z) {
+    const u = HJ_UBIN[z], nx = u.x[1] - u.x[0] + 1, ny = u.y[1] - u.y[0] + 1, w = nx * 256, h = ny * 256;
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+    const cx = cv.getContext("2d", { willReadFrequently: true });
+    const tugas = [];
+    for (let y = u.y[0]; y <= u.y[1]; y++) for (let x = u.x[0]; x <= u.x[1]; x++) {
+      tugas.push(fetch(urlUbin(isoMenit(t), z, x, y)).then((r) => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+        .then(createImageBitmap).then((bm) => cx.drawImage(bm, (x - u.x[0]) * 256, (y - u.y[0]) * 256)));
+    }
+    await Promise.all(tugas);
+    const px = cx.getImageData(0, 0, w, h).data, mm = new Float32Array(w * h);
+    for (let i = 0, j = 0; j < mm.length; i += 4, j++) mm[j] = px[i + 3] < 128 ? 0 : hujanDariSuhu(suhuWarna(px[i], px[i + 1], px[i + 2]));
+    return { t, z, w, h, mm, akhir: null, st: [] };
+  }
+  // Pengamatan bandara terdekat waktunya (±35 menit) untuk satu frame
+  function obsUntuk(s, t) {
+    let best = null;
+    for (const o of s.obs) { const d = Math.abs(Date.parse(o.t) - t); if (d <= 35 * 60000 && (!best || d < best.d)) best = { o, d }; }
+    return best?.o || null;
+  }
+  function koreksiBandara(f) {
+    const st = state.metarData?.stasiun || [];
+    const W = new Float32Array(f.w * f.h), WS = new Float32Array(f.w * f.h);
+    f.st = [];
+    for (const s of st) {
+      const o = obsUntuk(s, f.t);
+      if (!o) continue;
+      const [sx, sy] = keUbinPx(s.lon, s.lat, f.z);
+      if (sx < 0 || sy < 0 || sx >= f.w || sy >= f.h) continue;
+      const kmPx = (40075 * Math.cos((s.lat * Math.PI) / 180)) / (2 ** f.z * 256);
+      // nilai satelit tepat di bandara (rata-rata 3×3 piksel) — untuk ditampilkan di popup
+      let jum = 0, n = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const x = Math.round(sx) + dx, y = Math.round(sy) + dy;
+        if (x >= 0 && y >= 0 && x < f.w && y < f.h) { jum += f.mm[y * f.w + x]; n++; }
+      }
+      f.st.push({ s, o, sat: n ? jum / n : 0 });
+      const R = Math.ceil((3 * HJ_L_KM) / kmPx);
+      for (let y = Math.max(0, Math.floor(sy) - R); y <= Math.min(f.h - 1, Math.ceil(sy) + R); y++) {
+        for (let x = Math.max(0, Math.floor(sx) - R); x <= Math.min(f.w - 1, Math.ceil(sx) + R); x++) {
+          const dkm2 = ((x - sx) ** 2 + (y - sy) ** 2) * kmPx * kmPx;
+          if (dkm2 > 9 * HJ_L_KM * HJ_L_KM) continue;
+          const wt = Math.exp(-dkm2 / (2 * HJ_L_KM * HJ_L_KM)), j = y * f.w + x;
+          W[j] += wt; WS[j] += wt * o.mm;
+        }
+      }
+    }
+    const akhir = new Float32Array(f.w * f.h);
+    for (let j = 0; j < akhir.length; j++) akhir[j] = W[j] > 0 ? (HJ_W0 * f.mm[j] + WS[j]) / (HJ_W0 + W[j]) : f.mm[j];
+    f.akhir = akhir;
+  }
+  const kelasHujan = (mm) => { let k = null; for (const c of HUJAN_KELAS) if (mm >= c.min) k = c; return k; };
+  function gambarFrameHujan(f) {
+    const cv = document.createElement("canvas"); cv.width = f.w; cv.height = f.h;
+    const cx = cv.getContext("2d"), img = cx.createImageData(f.w, f.h), d = img.data;
+    for (let j = 0, i = 0; j < f.akhir.length; j++, i += 4) {
+      const k = kelasHujan(f.akhir[j]);
+      if (!k) continue;
+      d[i] = k.warna[0]; d[i + 1] = k.warna[1]; d[i + 2] = k.warna[2]; d[i + 3] = Math.round(k.a * 255);
+    }
+    cx.putImageData(img, 0, 0);
+    return { url: cv.toDataURL(), coordinates: batasUbin(f.z) };
+  }
+  // Muat ulang frame bila ada citra baru; koreksi ulang bila data bandara berganti
+  async function muatHujan() {
+    if (HJ.memuat || !state.hujan) return;
+    HJ.memuat = true;
+    tandaiLegendaHujan("Memuat citra satelit…");
+    try {
+      await paletIR();
+      const t0 = await waktuTerbaru();
+      if (!HJ.frames.length || HJ.frames.at(-1).t < t0) {
+        const ts = Array.from({ length: HJ_FRAME }, (_, k) => t0 - (HJ_FRAME - 1 - k) * HJ_LANGKAH * 60000);
+        // frame terbaru resolusi ±5 km (ubinnya kadang belum jadi → pakai ±10 km); frame lama ±10 km untuk animasi
+        const hasil = await Promise.all(ts.map((t, k) => (k === HJ_FRAME - 1
+          ? muatFrameHujan(t, 5).catch(() => muatFrameHujan(t, 4)) : muatFrameHujan(t, 4)).catch(() => null)));
+        const ok = hasil.filter(Boolean);
+        if (!ok.length) throw new Error("Citra satelit gagal dimuat");
+        HJ.frames = ok;
+        if (ok.at(-1).t !== t0) HJ.tTerbaru = null;   // frame terbaru belum lengkap: coba lagi saat penyegaran berikutnya
+        HJ.kunci = "";
+      }
+      const kunci = `${HJ.frames.map((f) => f.t).join()}|${state.metarData?.diambil || ""}`;
+      if (HJ.kunci !== kunci) {
+        HJ.frames.forEach((f) => { koreksiBandara(f); f.gambar = gambarFrameHujan(f); });
+        HJ.kunci = kunci; HJ.sumber = null;
+      }
+      pasangFrameHujan();
+    } catch (e) {
+      console.warn("Lapisan hujan:", e);
+      tandaiLegendaHujan("Citra satelit belum bisa dimuat. Coba lagi nanti.");
+    } finally {
+      HJ.memuat = false;
+    }
+  }
+  function pasangFrameHujan() {
+    if (!state.mapReady || !map.getSource("hujan-0") || !HJ.frames.length) return;
+    if (HJ.sumber !== map.getSource("hujan-0")) {   // sumber baru setelah ganti tema / muat ulang gaya peta
+      HJ.frames.forEach((f, k) => map.getSource(`hujan-${k}`)?.updateImage(f.gambar));
+      HJ.sumber = map.getSource("hujan-0");
+    }
+    if (HJ.i >= HJ.frames.length) HJ.i = HJ.frames.length - 1;
+    tampilFrameHujan(HJ.main ? HJ.i : HJ.frames.length - 1);
+    if (HJ.main) mulaiAnimasiHujan();
+  }
+  function tampilFrameHujan(i) {
+    HJ.i = i;
+    for (let k = 0; k < HJ_FRAME; k++) {
+      if (!map.getLayer(`hujan-${k}`)) continue;
+      map.setPaintProperty(`hujan-${k}`, "raster-opacity", state.hujan && k === i && k < HJ.frames.length ? 1 : 0);
+    }
+    const f = HJ.frames[i];
+    if (f) tandaiLegendaHujan(`Satelit ${jamWIB(new Date(f.t).toISOString())}${i === HJ.frames.length - 1 ? " · terbaru" : ""}`);
+  }
+  function mulaiAnimasiHujan() {
+    clearTimeout(HJ.timer);
+    if (!state.hujan || !HJ.main || HJ.frames.length < 2) return;
+    const akhir = HJ.i === HJ.frames.length - 1;
+    HJ.timer = setTimeout(() => { tampilFrameHujan((HJ.i + 1) % HJ.frames.length); mulaiAnimasiHujan(); }, akhir ? 2500 : 900);
+  }
+  function tandaiLegendaHujan(teks) {
+    const el = $("#lh-waktu");
+    if (el) el.textContent = teks;
+    const b = $("#lh-main");
+    if (b) { b.textContent = HJ.main ? "❚❚" : "▶"; b.setAttribute("aria-label", HJ.main ? "Jeda animasi" : "Putar animasi"); }
+  }
+  function terapkanHujan() {
+    $("#hujan-btn")?.setAttribute("aria-pressed", String(state.hujan));
+    const leg = $("#legenda-hujan");
+    if (leg) leg.hidden = !state.hujan;
+    if (!state.mapReady || !map.getSource("hujan-0")) return;
+    for (let k = 0; k < HJ_FRAME; k++) map.setLayoutProperty(`hujan-${k}`, "visibility", state.hujan ? "visible" : "none");
+    if (!state.hujan) { clearTimeout(HJ.timer); return; }
+    pasangFrameHujan();
+    muatHujan();
+  }
+  function setHujan(on) {
+    state.hujan = on;
+    simpan("wui-hujan", on ? "1" : "0");
+    if (on && state.udara) setUdara(false);     // dua lapisan warna bertumpuk membingungkan: satu saja
+    if (!on && state.popup && state.popupHujan) state.popup.remove();
+    terapkanHujan();
+  }
+  class LegendaHujan {
+    onAdd() {
+      const d = document.createElement("div");
+      d.className = "maplibregl-ctrl legenda-udara legenda-hujan"; d.id = "legenda-hujan"; d.hidden = !state.hujan;
+      d.innerHTML = `<div class="lu-judul">Hujan (perkiraan)</div><div class="lu-isi"><ul>
+        ${[...HUJAN_KELAS].reverse().map((k) => `<li><span style="--c:rgb(${k.warna})"></span>${esc(k.nama)}</li>`).join("")}</ul></div>
+        <div class="lh-bar"><button type="button" id="lh-main" class="lh-main" aria-label="Jeda animasi">❚❚</button>
+        <span id="lh-waktu">Memuat…</span></div>`;
+      d.querySelector("#lh-main").addEventListener("click", () => {
+        HJ.main = !HJ.main;
+        if (HJ.main) mulaiAnimasiHujan(); else { clearTimeout(HJ.timer); tampilFrameHujan(HJ.frames.length - 1); }
+        tandaiLegendaHujan($("#lh-waktu").textContent);
+      });
+      return d;
+    }
+    onRemove() { /* tidak dipakai */ }
+  }
+  map.addControl(new LegendaHujan(), "bottom-right");
+
+  // Titik di dalam poligon peringatan BMKG yang masih berlaku?
+  function peringatanDi(lng, lat) {
+    return (state.data.peringatan?.features || []).find((f) => {
+      const g = f.geometry; if (!g) return false;
+      const polys = g.type === "Polygon" ? [g.coordinates] : g.type === "MultiPolygon" ? g.coordinates : [];
+      return polys.some((p) => diDalamCincin(lng, lat, p[0]) && !p.slice(1).some((h) => diDalamCincin(lng, lat, h)));
+    });
+  }
+  // Klik di mana saja saat lapisan hujan aktif: "di sini sedang hujan?"
+  function showRainPopup(lngLat, wilayah) {
+    const f = HJ.frames.at(-1), { lng, lat } = lngLat;
+    if (!f) return;
+    const [px, py] = keUbinPx(lng, lat, f.z), x = Math.round(px), y = Math.round(py);
+    if (x < 0 || y < 0 || x >= f.w || y >= f.h) return;
+    const v = f.akhir[y * f.w + x];
+    let sekitar = 0;                    // hujan terderas dalam ±10 km
+    const r = Math.ceil(10 / ((40075 * Math.cos((lat * Math.PI) / 180)) / (2 ** f.z * 256)));
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx >= 0 && yy >= 0 && xx < f.w && yy < f.h) sekitar = Math.max(sekitar, f.akhir[yy * f.w + xx]);
+    }
+    const K = kelasHujan(v), Ks = kelasHujan(sekitar);
+    const judul = K ? K.nama : Ks ? "Tidak hujan, tapi ada hujan di dekat sini" : "Tidak hujan";
+    const warna = K ? `rgb(${K.warna})` : Ks ? `rgb(${Ks.warna})` : "#64748b";
+    lacak("Cek hujan di titik", { wilayah: (wilayah && wilayah.nama) || "" });
+    const umur = Math.round((Date.now() - f.t) / 60000);
+    const bandara = (state.metarData?.stasiun || []).map((s) => ({ s, km: Math.sqrt(kmXY(lng, lat, s.lon, s.lat)) }))
+      .filter((b) => b.km <= 50).sort((a, b) => a.km - b.km).slice(0, 2).map(({ s, km }) => {
+        const o = s.obs[0], kk = kelasHujan(o.mm);
+        return `<div class="st-row"><i style="--c:${kk ? `rgb(${kk.warna})` : "#64748b"}"></i><span><b>${esc(s.nama)}</b> · ${esc(o.label)}${o.sekitar ? " · petir/hujan di sekitar" : ""}
+          <small>${num(Math.round(km))} km · diamati ${esc(jamWIB(o.t))} (${esc(ago(o.t))})</small></span></div>`;
+      }).join("");
+    const pw = peringatanDi(lng, lat);
+    state.popupHujan = true;
+    popupAt(lngLat, `<div class="pop"><h3><span class="hi" style="--c:${warna}">${icon("hujan")}</span>${esc(judul)}</h3>
+      <div class="sub">Perkiraan dari citra satelit pukul <b>${esc(jamWIB(new Date(f.t).toISOString()))}</b> (${num(umur)} menit lalu)${wilayah?.nama ? ` · ${esc(wilayah.nama)}` : ""}</div>
+      ${pw ? `<div class="warn">Peringatan BMKG: <b>${esc(pw.properties.judul || "hujan lebat")}</b> berlaku hingga ${esc(jamWIB(pw.properties.berakhir))}.</div>` : ""}
+      <div class="sec-h" style="margin-top:8px">1 jam ke depan (model)</div><div class="grid3" data-hujan15>Memuat…</div>
+      ${bandara ? `<div class="sec-h" style="margin-top:8px">Pengamatan bandara terdekat</div>${bandara}` : ""}
+      <a class="lnk" href="https://www.bmkg.go.id/cuaca/radar" target="_blank" rel="noopener">Lihat radar BMKG ›</a>
+      <div class="src">Perkiraan = suhu puncak awan satelit Himawari (NASA GIBS) yang dikoreksi pengamatan cuaca bandara (METAR) di sekitarnya.
+        Bukan radar; bisa meleset untuk hujan kecil/lokal. 1 jam ke depan: model Open-Meteo.</div></div>`, () => { state.popupHujan = false; });
+    isiHujan15(lng, lat);
+  }
+  async function isiHujan15(lng, lat) {
+    let d = null;
+    try {
+      const u = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(3)}&longitude=${lng.toFixed(3)}`
+        + "&minutely_15=precipitation&forecast_minutely_15=5&timezone=UTC";
+      d = (await fetch(u).then((r) => (r.ok ? r.json() : null)))?.minutely_15;
+    } catch { d = null; }
+    const el = document.querySelector(".pop [data-hujan15]");
+    if (!el) return;
+    if (!d) { el.innerHTML = `<div class="nm">Perkiraan gagal dimuat.</div>`; return; }
+    const sekarang = Date.now();
+    el.innerHTML = d.time.map((t, i) => ({ t: Date.parse(t + "Z"), mm: d.precipitation[i] * 4 }))   // mm per 15 mnt → mm/jam
+      .filter((x) => x.t + 15 * 60000 > sekarang).slice(0, 3).map((x) => {
+        const k = kelasHujan(x.mm);
+        return `<div><b style="color:${k ? `rgb(${k.warna})` : "var(--muted)"}">${k ? esc(k.nama.split(" / ")[0]) : "Tidak hujan"}</b><span>${esc(jamWIB(new Date(x.t).toISOString()))}</span></div>`;
+      }).join("");
+  }
 
   // ---------- animasi partikel angin ----------
   // Partikel hanyut mengikuti angin (u/v diinterpolasi bilinear dari grid), meninggalkan jejak yang memudar.
