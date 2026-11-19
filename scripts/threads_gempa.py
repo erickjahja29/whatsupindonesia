@@ -167,7 +167,13 @@ def tangani(p, st, uji=False):
 
 
 def cek(st, regions):
-    gempa = [f["properties"] for f in fetch_quakes_bmkg(regions)]
+    gempa = []
+    for f in fetch_quakes_bmkg(regions):
+        p = f["properties"]
+        if not p.get("provinsi"):   # di laut: provinsi daratan terdekat (±1,5°) untuk judul postingan
+            lon, lat = f["geometry"]["coordinates"][:2]
+            p["provinsi_dekat"] = (regions.locate(lon, lat, 1.5) or {}).get("provinsi")
+        gempa.append(p)
     batas = max(datetime.fromisoformat(st["mulai"].replace("Z", "+00:00")), kini() - UMUR_MAKS)
     baru = [p for p in gempa if p["waktu"] not in st["gempa"]
             and datetime.fromisoformat(p["waktu"].replace("Z", "+00:00")) > batas]

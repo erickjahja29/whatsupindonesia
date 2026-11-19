@@ -37,6 +37,7 @@ def rapi_lokasi(s):
     t = re.sub(r"\b([Bb]arat|[Tt]imur) ?([Ll]aut|[Dd]aya)\b", lambda m: f"{m.group(1).lower()} {m.group(2).lower()}", t)
     t = re.sub(r"(\d+ km )(Utara|Selatan|Timur|Barat|Tenggara)\b", lambda m: m.group(1) + m.group(2).lower(), t)
     t = re.sub(r"([a-z])-([A-Z])", r"\1, \2", t)
+    t = re.sub(r"^(\d+ km) (?=[A-Z])", r"\1 dari ", t)   # BMKG kadang tanpa arah: "48 km Ruteng" -> "48 km dari Ruteng"
     return t.replace("Kab ", "Kab. ")
 
 
@@ -49,7 +50,12 @@ def teks_gempa(p):
     lok = rapi_lokasi(p.get("lokasi") or "")
     prov = SINGKAT_PROV.get(p.get("provinsi") or "", p.get("provinsi") or "")
     wilayah = ", ".join(x for x in (p.get("kabupaten"), prov) if x)
-    baris = [f"🔴 Gempa M{angka(p.get('magnitudo') or 0)} · {wilayah or lok}"]
+    if not wilayah:   # pusat gempa di laut: sebut "laut" dan provinsi terdekat
+        judul = ("laut " if re.search(r"di laut", p.get("lokasi") or "", re.I) else "") + lok
+        dekat = SINGKAT_PROV.get(p.get("provinsi_dekat") or "", p.get("provinsi_dekat") or "")
+        if dekat and dekat not in judul:
+            judul += f" ({dekat})"
+    baris = [f"🔴 Gempa M{angka(p.get('magnitudo') or 0)} · {wilayah or judul}"]
     if wilayah and lok:
         baris.append(f"📍 {lok}")
     baris.append(f"🕓 {t.day} {BULAN[t.month - 1]}, {t:%H.%M} WIB · kedalaman {angka(p.get('kedalaman_km') or 0)} km")

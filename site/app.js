@@ -383,7 +383,8 @@
     // arah mata angin huruf kecil: "BaratDaya" -> "barat daya"
     t = t.replace(/\b([Bb]arat|[Tt]imur) ?([Ll]aut|[Dd]aya)\b/g, (_, a, b) => `${a.toLowerCase()} ${b.toLowerCase()}`)
       .replace(/(\d+ km )(Utara|Selatan|Timur|Barat|Tenggara)\b/g, (_, k, w) => k + w.toLowerCase())
-      .replace(/([a-z])-([A-Z])/g, "$1, $2");
+      .replace(/([a-z])-([A-Z])/g, "$1, $2")
+      .replace(/^(\d+ km) (?=[A-Z])/, "$1 dari ");   // BMKG kadang tanpa arah: "48 km Ruteng" -> "48 km dari Ruteng"
     return t;
   }
   const jamWIB = (iso) => new Intl.DateTimeFormat(LOKAL, { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })
@@ -3181,6 +3182,10 @@
         if (TAUTAN.has("kartu") || isMobile()) setListHidden(true);
         showQuake(f, false);
         if (!TAUTAN.has("kartu")) return;
+        // kartu: hanya gempa yang dibahas, agar gempa lama di titik yang sama (mis. label M5.8) tidak mengecoh
+        const hanyaIni = ["==", ["get", "waktu"], GEMPA_TAUTAN];
+        map.setFilter("gempa", hanyaIni);
+        map.setFilter("gempa-label", ["all", hanyaIni, [">=", ["coalesce", ["get", "magnitudo"], 0], 5]]);
         // Kartu: detail di bawah (CSS), peta zoom ke gempa di ruang atasnya, lalu tandai siap difoto
         setTimeout(() => {
           const pop = document.querySelector(".maplibregl-popup");
