@@ -21,6 +21,14 @@
     return /^(id|ms)\b/i.test(navigator.language || "") ? "id" : "en";
   })();
   const LOKAL = BAHASA === "en" ? "en-GB" : "id-ID";
+  // Pengunjung lama (datang sebelum ada panduan) dikenali dari jejak kunjungan sebelumnya: pengaturan tersimpan
+  // (wui-…) atau service worker yang sudah terpasang. Dicek di awal, sebelum situs ini menulis apa pun.
+  const PERNAH_DATANG = (() => {
+    try { for (let k = 0; k < localStorage.length; k++) if (/^wui-/.test(localStorage.key(k) || "")) return true; } catch { /* mode privat */ }
+    return false;
+  })();
+  const SW_LAMA = ("serviceWorker" in navigator ? navigator.serviceWorker.getRegistration().then((r) => !!r) : Promise.resolve(false))
+    .catch(() => false);
   // ---------- bahasa: Indonesia / English ----------
   // Teks ditulis dalam bahasa Indonesia di kode. Saat bahasa Inggris dipilih, teks yang tampil di layar diterjemahkan
   // lewat kamus (cocok persis), frasa (potongan kalimat), dan pola (teks dengan angka/nama). Konten asli dari sumber
@@ -89,7 +97,8 @@
     "Tidak termasuk gunung api yang dipantau PVMBG, jadi tidak ada status level aktivitas.": "Not a volcano monitored by PVMBG, so there is no activity level.",
     "Status Normal: tidak ada peningkatan aktivitas yang dilaporkan.": "Normal status: no increase in activity reported.",
     "Memuat prakiraan…": "Loading forecast…", "Prakiraan cuaca gagal dimuat. Coba buka lagi nanti.": "Weather forecast failed to load. Try again later.",
-    "Hari ini": "Today", "Besok": "Tomorrow", "hembusan": "gusts", "Instagram": "Instagram",
+    "Foto & Video Aktivitas Terbaru": "Latest Photos & Videos", "Hari ini": "Today",
+ "Besok": "Tomorrow", "hembusan": "gusts", "Instagram": "Instagram",
     "Cerah": "Clear", "Cerah berawan": "Partly cloudy", "Berawan": "Cloudy", "Berkabut": "Foggy", "Gerimis": "Drizzle",
     "Hujan": "Rain", "Salju/es": "Snow/ice", "Hujan lokal": "Showers", "Hujan es": "Hail", "Badai petir": "Thunderstorm",
     "Senin": "Monday", "Selasa": "Tuesday", "Rabu": "Wednesday", "Kamis": "Thursday", "Jumat": "Friday", "Sabtu": "Saturday", "Minggu": "Sunday",
@@ -1178,12 +1187,7 @@
       return `<div class="row"><span>Daya api kecil</span><span class="ramp"></span><span>besar</span></div>
         <div class="note">Warna = daya radiasi api (FRP). Titik pudar = keyakinan rendah. Bulatan bergaris putih = laporan warga.</div>`;
     }
-    if (mode === "banjir") {
-      return `<div class="row"><span class="key" style="--c:${WARNA_WASPADA}55;--b:${WARNA_WASPADA}"><i></i>Waspada (BMKG)</span>
-        <span class="key" style="--c:#3ea6ff;--b:#fff"><i style="border-radius:50%"></i>Terjadi (warga)</span>
-        <span class="key" style="--c:${WARNA_BNPB}44;--b:${WARNA_BNPB}"><i></i>Resmi (BNPB)</span>
-        ${state.data.banjir_area?.features.length ? `<span class="key" style="--c:#3b82f688;--b:#3b82f6"><i></i>Area tergenang</span>` : ""}</div>`;
-    }
+    if (mode === "banjir") return "";   // keterangan warna = tombol tab di atas daftar
     if (mode === "gunung_api") {
       return `<div class="row">${[4, 3, 2, 1].map((lv) => `<span class="key tri">${segitiga(LEVEL_GUNUNG[lv].warna)}${LEVEL_GUNUNG[lv].nama}</span>`).join("")}</div>
         <div class="note">Level I Normal sampai IV Awas. Ikuti rekomendasi dan jarak aman dari PVMBG.</div>`;
@@ -1191,7 +1195,34 @@
     return ""; // gempa: cukup daftar
   }
 
-  function renderChips() { $("#chips").hidden = true; }   // filter jenis dulu khusus dock Laporan (sudah dihapus)
+  // Lapisan Banjir: keterangan Waspada/Terjadi/Resmi sekaligus tombol tab daftar (warnanya = warna di peta)
+  function tabBanjir() {
+    const d = state.data;
+    const n = { waspada: d.peringatan.features.length,
+      terjadi: d.laporan.features.filter((f) => ["banjir", "angin kencang"].includes(f.properties.jenis)).length + (d.banjir_area?.features.length || 0),
+      resmi: d.banjir_bnpb.features.length };
+    if (!state.banjirTab) state.banjirTab = n.waspada ? "waspada" : n.terjadi ? "terjadi" : "resmi";
+    return state.banjirTab;
+  }
+  function renderChips() {
+    const box = $("#chips");
+    box.classList.toggle("tab3", state.mode === "banjir");
+    if (state.mode !== "banjir" || !state.data.gempa) { box.hidden = true; return; }
+    const d = state.data, tab = tabBanjir();
+    const daftar = [
+      ["waspada", "Waspada (BMKG)", WARNA_WASPADA, d.peringatan.features.length],
+      ["terjadi", "Terjadi (warga)", "#3ea6ff", d.laporan.features.filter((f) => ["banjir", "angin kencang"].includes(f.properties.jenis)).length + (d.banjir_area?.features.length || 0)],
+      ["resmi", "Resmi (BNPB)", WARNA_BNPB, d.banjir_bnpb.features.length],
+    ];
+    box.hidden = false;
+    box.innerHTML = daftar.map(([id, label, c, n]) =>
+      `<button class="chip" data-bt="${id}" style="--c:${c}" aria-pressed="${tab === id}"><i></i>${esc(label)} <b>${num(n)}</b></button>`).join("");
+    box.querySelectorAll(".chip").forEach((b) => b.addEventListener("click", () => {
+      state.banjirTab = b.dataset.bt;
+      lacak("Tab banjir", { tab: b.dataset.bt });
+      renderChips(); renderList();
+    }));
+  }
 
   // Bagian "Laporan warga" di daftar tiap lapisan (baris ditambahkan ke `rows` dengan kind "lapor")
   function seksiLaporan(jenis, judul, rows, mulai) {
@@ -1239,46 +1270,49 @@
           ${beritaApi(r.p.wilayah_id).length ? `<span class="item-news">${icon("berita")} ${beritaApi(r.p.wilayah_id).length} berita karhutla</span>` : ""}</span></button>`).join("") : "";
       html += seksiLaporan(["kebakaran", "kabut asap"], "Laporan warga · kebakaran & asap 7 hari", rows, nKab);
     } else if (t === "banjir") {
-      // Tiga bagian: waspada (BMKG), terjadi (warga), resmi (BNPB)
+      // Tab: Waspada (BMKG) · Terjadi (laporan warga + area tergenang) · Resmi (BNPB) — hanya tab terpilih yang tampil
+      const tab = tabBanjir();
       const waspada = state.data.peringatan.features;
       const terjadi = state.data.laporan.features.filter((f) => f.properties.jenis === "banjir");
       const resmi = state.data.banjir_bnpb.features;
+      const area = state.data.banjir_area?.features || [];
       let i = 0;
       const sec = (title, c, n) => `<div class="sec-title" style="--c:${c}"><i></i>${title}<span>${num(n)}</span></div>`;
-      html += sec("Waspada sekarang · BMKG", WARNA_WASPADA, waspada.length);
-      html += waspada.length ? waspada.map((f) => {
-        const p = f.properties; rows.push({ kind: "waspada", f });
-        const kab = (p.kabupaten_list || []).slice(0, 3).join(", ") + ((p.kabupaten_list || []).length > 3 ? ` +${p.kabupaten_list.length - 3}` : "");
-        return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${WARNA_WASPADA}26;color:${WARNA_WASPADA}">${icon("banjir")}</span>
-          <span class="item-main"><div class="item-title">${esc(p.provinsi || "Peringatan")}</div>
-          <div class="item-sub">${esc(kab || "")}${kab ? " · " : ""}hingga ${esc(jamWIB(p.berakhir))} (${esc(sisa(p.berakhir))})</div></span></button>`;
-      }).join("") : `<div class="sec-note">Tidak ada peringatan hujan lebat aktif saat ini.</div>`;
-      html += sec("Banjir terjadi · laporan warga 7 hari", "#3ea6ff", terjadi.length);
-      html += terjadi.length ? terjadi.map((f) => {
-        const p = f.properties; rows.push({ kind: "terjadi", f });
-        return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:#3ea6ff26;color:#3ea6ff">${icon("banjir")}</span>
-          <span class="item-main"><div class="item-title">${esc(where(p) || "Lokasi")}</div>
-          <div class="item-sub">${esc(ago(p.waktu))}${p.teks ? ` · <span class="asli">${esc(p.teks.slice(0, 90)) + (p.teks.length > 90 ? "…" : "")}</span>` : ""}</div>
-          ${p.n_berita ? `<span class="item-news">${icon("berita")} ${p.n_berita} berita</span>` : ""}</span></button>`;
-      }).join("") : `<div class="sec-note">Belum ada laporan banjir dari warga.</div>`;
-      { const sA = seksiLaporan(["angin kencang"], "Angin kencang · laporan warga 7 hari", rows, i); i = rows.length; html += sA; }
-      html += sec("Data resmi · BNPB minggu ini", WARNA_BNPB, resmi.length);
-      html += resmi.length ? resmi.map((f) => {
-        const p = f.properties; rows.push({ kind: "resmi", f });
-        return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${WARNA_BNPB}22;color:${WARNA_BNPB};font-size:11px">BNPB</span>
-          <span class="item-main"><div class="item-title">${esc(p.kabupaten || p.kabupaten_bnpb)}</div>
-          <div class="item-sub">${esc(tglID(p.tanggal))} · ${esc(p.kategori)}${p.rumah_terendam ? ` · ${num(p.rumah_terendam)} rumah terendam` : ""}${p.mengungsi ? ` · ${num(p.mengungsi)} mengungsi` : ""}</div></span></button>`;
-      }).join("") + `<div class="sec-note">Data resmi diperbarui mingguan, bisa tertinggal beberapa hari.</div>`
-        : `<div class="sec-note">Belum ada kejadian banjir tercatat BNPB minggu ini.</div>`;
-      const area = state.data.banjir_area?.features || [];
-      if (area.length) {
-        html += sec("Area tergenang · PetaBencana 48 jam", "#3b82f6", area.length);
-        html += area.map((f) => {
-          const p = f.properties; rows.push({ kind: "area", f });
-          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:#3b82f626;color:#60a5fa">${icon("banjir")}</span>
-            <span class="item-main"><div class="item-title">${esc(p.nama)}</div>
-            <div class="item-sub">${esc(p.kota || "")}${p.kota ? " · " : ""}tinggi air ${esc(p.tinggi)} · ${esc(ago(p.waktu))}</div></span></button>`;
-        }).join("");
+      if (tab === "waspada") {
+        html += waspada.length ? waspada.map((f) => {
+          const p = f.properties; rows.push({ kind: "waspada", f });
+          const kab = (p.kabupaten_list || []).slice(0, 3).join(", ") + ((p.kabupaten_list || []).length > 3 ? ` +${p.kabupaten_list.length - 3}` : "");
+          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${WARNA_WASPADA}26;color:${WARNA_WASPADA}">${icon("banjir")}</span>
+            <span class="item-main"><div class="item-title">${esc(p.provinsi || "Peringatan")}</div>
+            <div class="item-sub">${esc(kab || "")}${kab ? " · " : ""}hingga ${esc(jamWIB(p.berakhir))} (${esc(sisa(p.berakhir))})</div></span></button>`;
+        }).join("") : `<div class="sec-note">Tidak ada peringatan hujan lebat aktif saat ini.</div>`;
+      } else if (tab === "terjadi") {
+        html += sec("Banjir terjadi · laporan warga 7 hari", "#3ea6ff", terjadi.length);
+        html += terjadi.length ? terjadi.map((f) => {
+          const p = f.properties; rows.push({ kind: "terjadi", f });
+          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:#3ea6ff26;color:#3ea6ff">${icon("banjir")}</span>
+            <span class="item-main"><div class="item-title">${esc(where(p) || "Lokasi")}</div>
+            <div class="item-sub">${esc(ago(p.waktu))}${p.teks ? ` · <span class="asli">${esc(p.teks.slice(0, 90)) + (p.teks.length > 90 ? "…" : "")}</span>` : ""}</div>
+            ${p.n_berita ? `<span class="item-news">${icon("berita")} ${p.n_berita} berita</span>` : ""}</span></button>`;
+        }).join("") : `<div class="sec-note">Belum ada laporan banjir dari warga.</div>`;
+        { const sA = seksiLaporan(["angin kencang"], "Angin kencang · laporan warga 7 hari", rows, i); i = rows.length; html += sA; }
+        if (area.length) {
+          html += sec("Area tergenang · PetaBencana 48 jam", "#3b82f6", area.length);
+          html += area.map((f) => {
+            const p = f.properties; rows.push({ kind: "area", f });
+            return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:#3b82f626;color:#60a5fa">${icon("banjir")}</span>
+              <span class="item-main"><div class="item-title">${esc(p.nama)}</div>
+              <div class="item-sub">${esc(p.kota || "")}${p.kota ? " · " : ""}tinggi air ${esc(p.tinggi)} · ${esc(ago(p.waktu))}</div></span></button>`;
+          }).join("");
+        }
+      } else {
+        html += resmi.length ? resmi.map((f) => {
+          const p = f.properties; rows.push({ kind: "resmi", f });
+          return `<button class="item" data-i="${i++}" style="--i:${i}"><span class="badge" style="background:${WARNA_BNPB}22;color:${WARNA_BNPB};font-size:11px">BNPB</span>
+            <span class="item-main"><div class="item-title">${esc(p.kabupaten || p.kabupaten_bnpb)}</div>
+            <div class="item-sub">${esc(tglID(p.tanggal))} · ${esc(p.kategori)}${p.rumah_terendam ? ` · ${num(p.rumah_terendam)} rumah terendam` : ""}${p.mengungsi ? ` · ${num(p.mengungsi)} mengungsi` : ""}</div></span></button>`;
+        }).join("") + `<div class="sec-note">Data resmi diperbarui mingguan, bisa tertinggal beberapa hari.</div>`
+          : `<div class="sec-note">Belum ada kejadian banjir tercatat BNPB minggu ini.</div>`;
       }
     } else if (t === "gunung_api") {
       const semua = state.data.gunung_api?.features || [];
@@ -2043,6 +2077,7 @@
     if (btn) btn.setAttribute("aria-pressed", String(state.udara));
     const leg = $("#legenda-udara");
     if (leg) leg.hidden = !state.udara;
+    document.body.classList.toggle("udara-on", !!state.udara);
     if (!state.mapReady || !map.getSource("udara-img")) return;
     const ada = !!state.udaraData && state.udara;
     if (ada) {
@@ -2459,7 +2494,7 @@
   // Medsos: tombol ke hashtag Instagram gunung (foto & video dari pengunjung). Dibuka di aplikasi/akun IG pengguna sendiri.
   function medsosHTML(p) {
     const dasar = p.nama.split(" (")[0], tag = (/^Puncak\b/.test(dasar) ? dasar : `gunung${dasar}`).toLowerCase().replace(/[^a-z0-9]/g, "");
-    return `<div class="sec-h" style="margin-top:0">Foto &amp; video terbaru dari pendaki</div>
+    return `<div class="sec-h" style="margin-top:0">Foto &amp; Video Aktivitas Terbaru</div>
       <a class="ms-btn ms-ig" href="https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/" target="_blank" rel="noopener noreferrer">
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".6"/></svg>
         Instagram</a>`;
@@ -2826,6 +2861,7 @@
     setTimeout(() => showRegionPopup(props, b.getCenter()), 0);
   }
 
+  $("#dock").addEventListener("animationend", () => updateCtrl());   // hitung ulang setelah dock selesai masuk
   function closeSheet() {
     $("#panel").classList.remove("open");
     $("#grip").setAttribute("aria-expanded", "false");
@@ -2836,7 +2872,10 @@
   function updateCtrl() {
     const set = () => {
       const dock = $("#dock"), panel = $("#panel"), H = window.innerHeight;
-      document.documentElement.style.setProperty("--dock-h", `${H - dock.getBoundingClientRect().top + 8}px`);
+      // tinggi dock dari ukuran aslinya (bukan posisi di layar): tidak terpengaruh animasi masuk dock
+      // (dulu tombol "Daftar …" bisa menumpuk ke dock bila dihitung saat dock masih bergeser turun)
+      const dockH = (parseFloat(getComputedStyle(dock).bottom) || 0) + dock.offsetHeight;
+      document.documentElement.style.setProperty("--dock-h", `${Math.round(dockH + 8)}px`);
       let topMost = dock.getBoundingClientRect().top;
       if (isMobile() && !panel.hidden) topMost = Math.min(topMost, panel.getBoundingClientRect().top);
       const show = $("#show-list");
@@ -2942,6 +2981,9 @@
       teks: "Ambil data dan versi situs terbaru kapan saja." },
   ];
   const TUR = { antre: [], i: 0, baru: false, root: null, aktif: null, kamera: null };
+  // Langkah dasar (sudah ada sebelum panduan dibuat). Pengunjung lama tanpa catatan panduan dianggap sudah tahu ini,
+  // jadi mereka hanya melihat langkah fitur yang lebih baru (Cari tempat, Layer, dst.).
+  const PANDUAN_DASAR = ["sambut", "ticker", "dock", "lapisan-cuaca", "wilayah", "setelan", "segar"];
   async function contohWilayahMasuk() {
     TUR.kamera = { center: map.getCenter(), zoom: map.getZoom() };
     const e = (await indeksWilayah()).find((x) => x.nama === "Kota Jakarta Pusat");
@@ -3065,8 +3107,9 @@
     TUR.root.remove(); TUR.root = null;
   }
   // Mulai otomatis setelah peta & data siap dan animasi pembuka selesai (sekali per kunjungan)
-  function jadwalkanPanduan() {
+  async function jadwalkanPanduan() {
     if (new URLSearchParams(location.search).has("tanpa-panduan")) return;
+    if (!panduanDilihat().size && (PERNAH_DATANG || await SW_LAMA)) tandaiPanduan(PANDUAN_DASAR);
     const tunggu = () => (state.mapReady && state.data.gempa ? setTimeout(() => mulaiPanduan(false), REDUCED ? 300 : 3200) : setTimeout(tunggu, 400));
     tunggu();
   }
