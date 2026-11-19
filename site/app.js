@@ -1781,7 +1781,8 @@
         : `<div class="nm">Diperkirakan <b>tidak terasa</b> di permukaan${(p.kedalaman_km || 0) >= 100 ? ` — pusat gempa sangat dalam (${esc(p.kedalaman_km)} km)` : " — magnitudo kecil"}${p.dirasakan ? "" : ", dan BMKG tidak mencatatnya sebagai gempa dirasakan"}.</div>`}
       ${shake ? `<div class="nm" style="margin-top:6px"><a href="${esc(shake)}" target="_blank" rel="noopener">Peta guncangan BMKG</a></div>` : ""}` },
       { id: "b", ic: "berita", label: "Berita", n: beritaGempa(p).length,
-        html: newsHTML(beritaGempa(p), (p.magnitudo || 0) >= 4.5 || p.dirasakan ? "Belum ada berita media untuk gempa ini." : "Gempa kecil ini jarang diberitakan media.") }])}</div>`;
+        html: newsHTML(beritaGempa(p), (p.magnitudo || 0) >= 4.5 || p.dirasakan ? "Belum ada berita media untuk gempa ini." : "Gempa kecil ini jarang diberitakan media.") },
+      { id: "m", ic: "lapor", label: "Medsos", html: medsosGempaHTML(p) }])}</div>`;
 
     const owner = `${p.waktu}|${lng}|${lat}`;
     state.ringsOwner = owner;
@@ -2516,6 +2517,35 @@
   // Medsos: tombol ke hashtag Instagram gunung (foto & video dari pengunjung). Dibuka di aplikasi/akun IG pengguna sendiri.
   function medsosHTML(p) {
     const dasar = p.nama.split(" (")[0], tag = (/^Puncak\b/.test(dasar) ? dasar : `gunung${dasar}`).toLowerCase().replace(/[^a-z0-9]/g, "");
+    return `<div class="sec-h" style="margin-top:0">Foto &amp; Video Aktivitas Terbaru</div>
+      <a class="ms-btn ms-ig" href="https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/" target="_blank" rel="noopener noreferrer">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".6"/></svg>
+        Instagram</a>`;
+  }
+
+  // Medsos gempa: hashtag Instagram "#gempa<tempat>" agar pengunjung bisa melihat kondisi lokasi
+  // dari unggahan warga. Hanya tautan keluar (dibuka di aplikasi/akun pengguna sendiri), tidak ada API/data yang diambil.
+  // Arah di depan nama tempat, BMKG ("BaratDaya", "barat daya", "Tenggara") maupun USGS ("ENE of"), tanpa peduli huruf besar/kecil
+  const ARAH_LOKASI = /^\d+(?:[.,]\d+)?\s*km\s+(?:(?:barat|timur)\s*(?:laut|daya)|utara|selatan|timur|barat|tenggara|[nsew]{1,3})(?:\s+of)?\s+/i;
+  // Nama tempat dari teks lokasi gempa (null bila tak terurai):
+  // "Pusat gempa berada di laut 49 km timur laut Ruteng, Manggarai" -> "Ruteng"; "130 km BaratDaya MALUKUTENGGARA" -> "Maluku Tenggara";
+  // "114 km BaratDaya NIASBARAT-SUMUT" -> "Nias Barat"; "123 km ENE of Tobelo, Indonesia" -> "Tobelo"; "Banda Sea" -> "Banda Sea"
+  function namaTempatLokasi(s) {
+    const t = rapiLokasi(String(s || "").trim().replace(/^Pusat gempa berada di\s+(?:(?:laut|darat)\s+(?=\d))?/i, "")) || "";
+    const nama = t.replace(ARAH_LOKASI, "").split(",")[0].trim();
+    // sisa angka/"km" berarti format tak dikenal; "Indonesia" saja terlalu umum untuk pencarian
+    if (!nama || /\d|\bkm\b/i.test(nama) || /^indonesia$/i.test(nama)) return null;
+    return nama;
+  }
+  function tempatGempa(p) {
+    const bersih = (s) => String(s || "").replace(/^(?:Kab\.\s*|(?:Kabupaten|Kota)\s+)/i, "").trim();
+    if (p.kabupaten) return bersih(p.kabupaten);
+    // nama tempat dari lokasi; bila tak terurai (atau lokasi kosong), pakai provinsi
+    return bersih(namaTempatLokasi(p.lokasi)) || bersih(p.provinsi);
+  }
+  function medsosGempaHTML(p) {
+    const tempat = tempatGempa(p);
+    const tag = `gempa${tempat}`.toLowerCase().replace(/[^a-z0-9]/g, "");
     return `<div class="sec-h" style="margin-top:0">Foto &amp; Video Aktivitas Terbaru</div>
       <a class="ms-btn ms-ig" href="https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/" target="_blank" rel="noopener noreferrer">
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".6"/></svg>
