@@ -21,7 +21,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-  <link rel="stylesheet" href="style.css?v=83">
+  <link rel="stylesheet" href="style.css?v=89">
   <!-- Statistik pengunjung (Umami Cloud, tanpa cookie). Hanya mencatat di domain asli, tidak di localhost. -->
   <script defer src="https://cloud.umami.is/script.js" data-website-id="97476413-1139-40c2-8300-0a5d29eda1a0" data-domains="whatsupindonesia.id,www.whatsupindonesia.id"></script>
 </head>
@@ -56,6 +56,13 @@
         </div>
       </section>
       <section class="st-sec">
+        <h2>Bahasa</h2>
+        <div class="seg" role="radiogroup" aria-label="Bahasa / Language">
+          <button type="button" class="seg-btn seg-teks" data-bahasa="id" role="radio" aria-checked="false">Indonesia</button>
+          <button type="button" class="seg-btn seg-teks" data-bahasa="en" role="radio" aria-checked="false">English</button>
+        </div>
+      </section>
+      <section class="st-sec">
         <h2>Pasang di HP</h2>
         <button type="button" id="pasang-btn" class="st-btn">
           <svg viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M12 8v6M9 11l3 3 3-3"/></svg>
@@ -63,6 +70,9 @@
         <p id="pasang-info" class="st-note" hidden></p>
       </section>
       <section class="st-sec">
+        <button type="button" id="panduan-btn" class="st-btn" style="margin-bottom:8px">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><circle cx="12" cy="17" r=".6"/></svg>
+          <span>Lihat panduan</span></button>
         <button type="button" id="sumber-btn" class="st-btn" aria-expanded="false" aria-controls="sumber">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.6" r=".6"/></svg>
           <span>Info &amp; sumber data</span></button>
@@ -93,7 +103,7 @@
   <div id="cari" class="glass cari" role="search" hidden>
     <div class="cari-row">
       <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-      <input id="cari-input" type="search" placeholder="Cari kota, kabupaten, provinsi, atau gunung" autocomplete="off"
+      <input id="cari-input" type="search" placeholder="Cari daerah, kelurahan, tempat, atau gunung" autocomplete="off"
         aria-label="Cari kota, kabupaten, atau provinsi" aria-controls="cari-hasil">
       <button id="cari-tutup" class="icon-btn" aria-label="Tutup pencarian"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
     </div>
@@ -152,6 +162,6 @@
   </button>
 
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-  <script src="app.js?v=99"></script>
+  <script src="app.js?v=119"></script>
 </body>
 </html>
