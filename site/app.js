@@ -8,7 +8,8 @@
   const HOUR = 3600 * 1000;
   const INDONESIA = [[94.5, -11.5], [141.5, 6.5]];
   const TICK_MS = 6000;
-  const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const KARTU = /[?&]kartu\b/.test(location.search);   // ?kartu: tampilan untuk screenshot otomatis
+  const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches || KARTU;   // kartu: tanpa animasi agar screenshot tajam
   // Bahasa: pilihan pengguna di Pengaturan; kalau belum memilih, perangkat di zona waktu Indonesia → Indonesia
   // (banyak orang Indonesia memakai HP berbahasa Inggris), selain itu ikut bahasa browser.
   const BAHASA = (() => {
@@ -442,9 +443,11 @@
     const H = window.innerHeight;
     const tk = $("#ticker"), dock = $("#dock"), panel = $("#panel");
     const top = (tk && !tk.hidden ? tk.getBoundingClientRect().bottom : 70) + 16;
-    let bottomTop = dock.getBoundingClientRect().top;
-    if (isMobile() && !panel.hidden) bottomTop = Math.min(bottomTop, panel.getBoundingClientRect().top);
-    const bottom = Math.max(H - bottomTop + 16, 40);
+    let bottomTop = dock.offsetHeight ? dock.getBoundingClientRect().top : H;   // dock tersembunyi (mode kartu) = tak memakan tempat
+    if (isMobile() && !panel.hidden && panel.offsetHeight) bottomTop = Math.min(bottomTop, panel.getBoundingClientRect().top);
+    let bottom = Math.max(H - bottomTop + 16, 40);
+    // pengaman: sisakan minimal 120 px peta, kalau tidak MapLibre gagal menghitung kamera (NaN)
+    if (top + bottom > H - 120) bottom = Math.max(H - 120 - top, 20);
     const left = !isMobile() && state.mode && !state.listHidden ? 420 : 30;
     return { top, bottom, left, right: 30 };
   }
@@ -773,7 +776,8 @@
     terapkanAngin();
     terapkanUdara();
     // Intro: terbang dari jauh ke Indonesia
-    setTimeout(() => map.fitBounds(INDONESIA, { padding: viewPadding(), duration: REDUCED ? 0 : 2600,
+    // tautan ?gempa= / mode kartu: kamera diatur oleh bukaGempaTautan, jangan ditimpa animasi pembuka
+    if (!KARTU && !/[?&]gempa=/.test(location.search)) setTimeout(() => map.fitBounds(INDONESIA, { padding: viewPadding(), duration: REDUCED ? 0 : 2600,
       curve: 1.6, essential: true }), REDUCED ? 0 : 250);
   });
 
@@ -1553,7 +1557,7 @@
   // Geser peta sedikit bila popup keluar dari area aman
   function fitPopup() {
     const el = state.popup?.getElement();
-    if (!el) return;
+    if (!el || KARTU) return;   // kartu: popup sudah tetap di bawah, peta jangan digeser
     // Jangan geser di tengah animasi kamera (akan saling menimpa): tunggu sampai berhenti
     if (map.isMoving()) { map.once("moveend", () => setTimeout(fitPopup, 0)); return; }
     updatePopMax();
@@ -1791,7 +1795,7 @@
       if (state.ringsOwner !== owner) return; // sudah diganti gempa lain
       // Desktop: tutup popup = hapus lingkaran. HP: lingkaran tetap tampil sampai gempa lain diklik.
       popupAt({ lng, lat }, html, () => { if (!isMobile()) clearRings(owner); });
-      map.fitBounds(b, { padding: viewPadding(), maxZoom: 9, duration: REDUCED ? 0 : fly === false ? 700 : 1100 });
+      if (!KARTU) map.fitBounds(b, { padding: viewPadding(), maxZoom: 9, duration: REDUCED ? 0 : fly === false ? 700 : 1100 });
     }, 0);
   }
 
@@ -3132,11 +3136,59 @@
     tunggu();
   }
 
+  // ---------- tautan langsung ke satu gempa ----------
+  // ?gempa=<waktu UTC, mis. 2026-11-18T03:24:03Z> membuka gempa itu (tautan di postingan Threads).
+  // ?kartu = tampilan bersih untuk screenshot otomatis (tanpa ticker, dock, tombol); <body data-siap> saat siap difoto.
+  const TAUTAN = new URLSearchParams(location.search);
+  const GEMPA_TAUTAN = TAUTAN.get("gempa");
+  if (TAUTAN.has("kartu")) document.body.classList.add("kartu");
+  async function bukaGempaTautan() {
+    if (!GEMPA_TAUTAN) return;
+    for (let i = 0; i < 60; i++) {   // gempa yang baru terjadi mungkin baru muncul setelah cek BMKG langsung
+      const f = state.mapReady && state.data.gempa?.features.find((x) => x.properties.waktu === GEMPA_TAUTAN);
+      if (f) {
+        if (state.mode !== "gempa") { state.mode = "gempa"; applyMode(false); }
+        if (TAUTAN.has("kartu") || isMobile()) setListHidden(true);
+        showQuake(f, false);
+        if (!TAUTAN.has("kartu")) return;
+        // Kartu: detail di bawah (CSS), peta zoom ke gempa di ruang atasnya, lalu tandai siap difoto
+        setTimeout(() => {
+          const pop = document.querySelector(".maplibregl-popup");
+          const bawah = (pop ? pop.offsetHeight : 260) + 40;
+          const [lng, lat] = f.geometry.coordinates;
+          const { rings } = ringRadii(f.properties);
+          const r = Math.max(rings.length ? Math.max(...rings.map((x) => x.km)) : 60, 70);   // min. 70 km: pulau sekitar ikut terlihat
+          // zoom agar lingkaran guncangan terbesar (min. 30 km) muat di ruang peta di atas kartu
+          const tinggi = Math.max(window.innerHeight - 90 - bawah, 120), lebar = window.innerWidth - 60;
+          const mPerPx = (2 * r * 1000) / Math.min(tinggi, lebar);
+          const zoom = Math.min(8.5, Math.log2((78271.52 * Math.cos(lat * Math.PI / 180)) / mPerPx));
+          map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
+          map.jumpTo({ center: [lng, lat], zoom });
+          // pusat gempa ke tengah ruang di atas kartu (posisi mutlak, aman bila terpanggil berulang)
+          const c = map.getCanvas();
+          map.jumpTo({ center: map.unproject([c.clientWidth / 2, c.clientHeight / 2 + (bawah - 90) / 2]) });
+          // titik gempa berdenyut terus, jadi peta tak pernah "idle": tunggu semua ubin peta termuat
+          let n = 0;
+          const cek = setInterval(() => {
+            if ((map.areTilesLoaded() && map.isStyleLoaded()) || ++n > 40) {
+              clearInterval(cek);
+              setTimeout(() => { document.body.dataset.siap = "1"; }, 1500);
+            }
+          }, 250);
+        }, 300);
+        return;
+      }
+      if (i % 10 === 9) { state.kunciAuto = null; cekGempaRealtime(); }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    document.body.dataset.siap = "tidak-ketemu";
+  }
+
   // ---------- mulai ----------
   state.mode = MODES[location.hash.slice(1)] ? location.hash.slice(1) : null;
   wireUI();
   applyMode(false);
-  loadLive().then(cekGempaRealtime);
+  loadLive().then(cekGempaRealtime).then(bukaGempaTautan);
   jadwalkanPanduan();
   setInterval(async () => {
     // tab terbuka lama tanpa disentuh: muat ulang hanya bila ada versi baru & tidak ada popup yang sedang dibaca

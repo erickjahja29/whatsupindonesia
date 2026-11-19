@@ -605,3 +605,17 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
   .chips.tab3 { gap: 2px; }
   .chips.tab3 .chip b { display: none; }   /* HP: tanpa angka agar muat satu baris */
 }
+/* ?kartu: tampilan bersih untuk screenshot postingan Threads (hanya merek, peta, popup gempa) */
+body.kartu #ticker, body.kartu #dock, body.kartu #show-list, body.kartu #panel,
+body.kartu .brand .icon-btn, body.kartu #updated, body.kartu .maplibregl-ctrl-top-right,
+body.kartu .maplibregl-ctrl-bottom-right .maplibregl-ctrl-group, body.kartu .ctrl-sembunyi,
+body.kartu .ctrl-angin, body.kartu .ctrl-udara, body.kartu .tur { display: none !important; }
+body.kartu .brand-row::after { content: "whatsupindonesia.id"; margin-left: auto; font-size: 12px; font-weight: 600; opacity: .7; }
+body.kartu .pop .ptabs { display: none !important; }
+body.kartu .pop .ppane[data-t="d"] { display: block !important; }
+body.kartu *, body.kartu *::before, body.kartu *::after { animation: none !important; transition: none !important; }
+/* kartu: popup gempa jadi kartu tetap di bawah, tanpa ekor */
+body.kartu .maplibregl-popup { position: fixed !important; transform: none !important; top: auto !important; left: 16px !important;
+  right: 16px !important; bottom: 16px !important; max-width: none !important; }
+body.kartu .maplibregl-popup-tip, body.kartu .maplibregl-popup-close-button, body.kartu .pop .src { display: none !important; }
+body.kartu .maplibregl-popup-content, body.kartu .pop { max-height: none !important; }
