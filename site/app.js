@@ -398,8 +398,26 @@
   const isMobile = () => window.innerWidth <= 760;
   const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 
+  // Data live diambil dulu dari VPS (robot tiap 5 menit). Bila VPS tidak menjawab, atau datanya basi
+  // (robot VPS berhenti), pakai salinan dari GitHub Pages (robot GitHub) selama 5 menit berikutnya.
+  // Di localhost tetap memakai data lokal, kecuali alamat diberi ?vps.
+  const DATA_VPS = "https://data.whatsupindonesia.id/data/";
+  const PAKAI_VPS = !/^(localhost|127\.|\[::1\])/.test(location.hostname) || /[?&]vps\b/.test(location.search);
+  let vpsMatiSampai = 0;
   async function getJSON(path) {
-    const r = await fetch(`${DATA}${path}?t=${Math.floor(Date.now() / 60000)}`);
+    const q = `${path}?t=${Math.floor(Date.now() / 60000)}`;
+    if (PAKAI_VPS && path.startsWith("live/") && Date.now() > vpsMatiSampai) {
+      try {
+        const r = await fetch(DATA_VPS + q, AbortSignal.timeout ? { signal: AbortSignal.timeout(8000) } : {});
+        if (r.ok) {
+          const j = await r.json();
+          const basi = path === "live/meta.json" && Date.now() - Date.parse(j.diperbarui) > 40 * 60000;
+          if (!basi) return j;
+        }
+      } catch { /* VPS tidak menjawab */ }
+      vpsMatiSampai = Date.now() + 5 * 60000;
+    }
+    const r = await fetch(`${DATA}${q}`);
     if (!r.ok) throw new Error(`${path}: ${r.status}`);
     return r.json();
   }
