@@ -216,23 +216,45 @@
   });
   map.on("idle", () => { if (!pulih.gagal) pulih.coba = 0; });
 
-  // Tombol muat ulang: peta dasar + semua data, tanpa memuat ulang halaman
+  // Tombol muat ulang: muat ulang SELURUH halaman (kode terbaru + peta + semua data).
+  // Posisi lapisan (#gempa dst.) & pengaturan tetap, karena tersimpan di URL & localStorage.
   function segarkan() {
     const b = $("#segar-btn");
     if (b.classList.contains("putar")) return;
     b.classList.add("putar");
-    if (state.popup) state.popup.remove();
-    pulih.gagal = 0; pulih.coba = 0;
-    map.setStyle(GAYA[state.tema], { diff: false });
-    Promise.all([loadLive(), new Promise((r) => { map.once("idle", r); setTimeout(r, 8000); })])
-      .finally(() => b.classList.remove("putar"));
+    lacak("Muat ulang");
+    location.reload();
   }
-  // Kembali ke tab setelah lama ditinggal: ambil data terbaru
-  let tSembunyi = 0;
+  // Apakah situs sudah diperbarui sejak halaman ini dibuka? (bandingkan versi app.js di index.html terbaru)
+  const VERSI_INI = (document.querySelector('script[src*="app.js"]')?.getAttribute("src").match(/v=(\d+)/) || [])[1];
+  async function adaVersiBaru() {
+    try {
+      const html = await fetch(`./?cek=${Date.now()}`, { cache: "no-store" }).then((r) => (r.ok ? r.text() : ""));
+      const v = (html.match(/app\.js\?v=(\d+)/) || [])[1];
+      return !!(v && VERSI_INI && v !== VERSI_INI);
+    } catch { return false; }
+  }
+  // Kembali ke tab / aplikasi terpasang (dari latar belakang, tombol kembali, atau setelah offline):
+  // versi baru → muat ulang penuh; kalau tidak, langsung ambil data & gempa terbaru.
+  let tSembunyi = 0, sedangSegar = false;
+  async function segarkanSaatKembali() {
+    if (sedangSegar) return;
+    sedangSegar = true;
+    try {
+      state.swReg?.update().catch(() => {});
+      if (await adaVersiBaru()) return location.reload();
+      cekGempaRealtime();
+      await loadLive();
+    } finally { sedangSegar = false; }
+  }
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) tSembunyi = Date.now();
-    else if (tSembunyi && Date.now() - tSembunyi > 5 * 60 * 1000) loadLive();
+    if (document.hidden) { tSembunyi = Date.now(); return; }
+    const lama = tSembunyi ? Date.now() - tSembunyi : 0;
+    tSembunyi = 0;
+    if (lama >= 30 * 1000) segarkanSaatKembali();     // ditinggal ≥ 30 detik
   });
+  window.addEventListener("pageshow", (e) => { if (e.persisted) segarkanSaatKembali(); }); // halaman dipulihkan dari memori browser
+  window.addEventListener("online", segarkanSaatKembali);                                // internet tersambung lagi
 
   // Lapisan data di atas peta dasar. Dipasang ulang setiap gaya peta berganti (tema terang/gelap).
   function pasangLapisan() {
@@ -2037,7 +2059,11 @@
     window.addEventListener("appinstalled", () => { state.pasangPrompt = null; perbaruiPasang(); });
     // tanda kecil di tombol pengaturan untuk pengunjung HP yang belum pernah membukanya
     if (isMobile() && !diPasang() && !baca("wui-lihat-setelan")) $("#setelan-btn").classList.add("titik");
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { /* opsional */ });
+    if ("serviceWorker" in navigator) {
+      // updateViaCache "none": file sw.js selalu dicek ke server, jadi perbaikan service worker cepat sampai ke HP
+      navigator.serviceWorker.register("sw.js", { updateViaCache: "none" })
+        .then((r) => { state.swReg = r; }).catch(() => { /* opsional */ });
+    }
   }
 
   // ---------- gunung api ----------
@@ -2476,7 +2502,10 @@
   wireUI();
   applyMode(false);
   loadLive().then(cekGempaRealtime);
-  setInterval(loadLive, REFRESH_MS);
+  setInterval(async () => {
+    // tab terbuka lama tanpa disentuh: muat ulang hanya bila ada versi baru & tidak ada popup yang sedang dibaca
+    if (!state.popup && await adaVersiBaru()) return location.reload();
+    loadLive();
+  }, REFRESH_MS);
   setInterval(cekGempaRealtime, GEMPA_RT_MS);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) cekGempaRealtime(); });
 })();
