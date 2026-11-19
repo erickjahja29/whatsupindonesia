@@ -664,7 +664,7 @@ def nilai_hujan_metar(wx):
 
 def fetch_metar():
     """Pengamatan cuaca bandara (METAR) 3 jam terakhir dari NOAA Aviation Weather Center.
-    Dipakai sebagai 'kebenaran lapangan' untuk mengoreksi perkiraan hujan dari satelit Himawari."""
+    (Robot hujan scripts/hujan.py memakai METAR_URL & nilai_hujan_metar langsung.)"""
     data = json.loads(get(METAR_URL.format(*BBOX), timeout=40))
     st = {}
     for m in data:
@@ -964,18 +964,6 @@ def main():
         prev = old_meta.get("lapisan", {}).get("ispu", {})
         meta["lapisan"]["ispu"] = {**prev, "ok": False, "galat": str(e)[:200]}
         pertahankan("ispu.geojson", fc([]))
-
-    print("- cuaca bandara (METAR) ...")
-    try:
-        metar, info = fetch_metar()
-        (LIVE / "metar.json").write_text(json.dumps(metar, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
-        meta["lapisan"]["metar"] = {"ok": True, "jumlah": info["jumlah_stasiun"], "diambil": iso(NOW), **info}
-        print(f"  {info}")
-    except Exception as e:
-        traceback.print_exc()
-        prev = old_meta.get("lapisan", {}).get("metar", {})
-        meta["lapisan"]["metar"] = {**prev, "ok": False, "galat": str(e)[:200]}
-        pertahankan("metar.json", None)
 
     print("- berita terkait laporan ...")
     try:
