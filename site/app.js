@@ -765,16 +765,25 @@
     bar.style.setProperty("--c", it.c);
     bar.classList.remove("run"); void bar.offsetWidth; bar.classList.add("run");
     bar.style.setProperty("--dur", `${TICK_MS}ms`);
+    // Pergantian diatur timer, bukan akhir animasi garis progres: pengguna yang mematikan animasi di perangkatnya
+    // (prefers-reduced-motion) membuat animasi "selesai" seketika → dulu ticker berganti tiap frame.
+    clearTimeout(state.tick.t);
+    state.tick.t = setTimeout(lanjutTick, TICK_MS);
+  }
+  function lanjutTick() {
+    if (state.tick.jeda || state.tick.items.length < 2) {   // kursor di atas ticker / hanya satu kabar: tunggu lagi
+      const bar = $("#tk-bar");
+      bar.classList.remove("run"); void bar.offsetWidth; bar.classList.add("run");
+      clearTimeout(state.tick.t);
+      state.tick.t = setTimeout(lanjutTick, TICK_MS);
+      return;
+    }
+    showTick((state.tick.i + 1) % state.tick.items.length);
   }
   function wireTicker() {
-    const tk = $("#ticker"), bar = $("#tk-bar");
-    let paused = false;
-    tk.addEventListener("mouseenter", () => { paused = true; });
-    tk.addEventListener("mouseleave", () => { paused = false; });
-    bar.addEventListener("animationend", () => {
-      if (!paused && state.tick.items.length > 1) showTick((state.tick.i + 1) % state.tick.items.length);
-      else { bar.classList.remove("run"); void bar.offsetWidth; bar.classList.add("run"); }
-    });
+    const tk = $("#ticker");
+    tk.addEventListener("mouseenter", () => { state.tick.jeda = true; });
+    tk.addEventListener("mouseleave", () => { state.tick.jeda = false; });
     const go = () => state.tick.items[state.tick.i]?.go();
     tk.addEventListener("click", go);
     tk.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });

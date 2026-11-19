@@ -689,6 +689,20 @@ def load_previous(name):
     return {}
 
 
+def pertahankan(name, kosong):
+    """Sumber gagal: pakai data terakhir yang berhasil (lokal, atau dari situs yang sudah terbit), jangan
+    menimpanya dengan data kosong. Di GitHub Actions folder data selalu kosong di awal, jadi data lama
+    harus diambil dari situs. Bila memang tidak ada sama sekali, tulis `kosong` (None = jangan tulis)."""
+    if (LIVE / name).exists():
+        return
+    lama = load_previous(name)
+    if lama:
+        print(f"  pakai {name} terakhir yang berhasil")
+        (LIVE / name).write_text(json.dumps(lama, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+    elif kosong is not None:
+        (LIVE / name).write_text(json.dumps(kosong), encoding="utf-8")
+
+
 def fetch_report_news(reports):
     cache = load_previous("berita_laporan.json")
     out, dicari = {}, 0
@@ -844,7 +858,7 @@ def main():
     LIVE.mkdir(parents=True, exist_ok=True)
     regions = RegionIndex(DATA / "wilayah.geojson")
     meta_path = LIVE / "meta.json"
-    old_meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    old_meta = load_previous("meta.json")   # lokal, atau (di GitHub Actions) dari situs yang sudah terbit
     meta = {"diperbarui": iso(NOW), "lapisan": {}}
 
     for key, fn in (("gempa", fetch_quakes), ("titik_panas", fetch_hotspots), ("laporan", fetch_reports),
@@ -861,8 +875,7 @@ def main():
             traceback.print_exc()
             prev = old_meta.get("lapisan", {}).get(key, {})
             meta["lapisan"][key] = {**prev, "ok": False, "galat": str(e)[:200]}
-            if not (LIVE / f"{key}.geojson").exists():
-                (LIVE / f"{key}.geojson").write_text(json.dumps(fc([])), encoding="utf-8")
+            pertahankan(f"{key}.geojson", fc([]))
 
     print("- angin ...")
     try:
@@ -874,6 +887,7 @@ def main():
         traceback.print_exc()
         prev = old_meta.get("lapisan", {}).get("angin", {})
         meta["lapisan"]["angin"] = {**prev, "ok": False, "galat": str(e)[:200]}
+        pertahankan("angin.json", None)
 
     print("- polusi udara ...")
     try:
@@ -885,6 +899,7 @@ def main():
         traceback.print_exc()
         prev = old_meta.get("lapisan", {}).get("udara", {})
         meta["lapisan"]["udara"] = {**prev, "ok": False, "galat": str(e)[:200]}
+        pertahankan("udara.json", None)
 
     print("- ISPU stasiun resmi ...")
     try:
@@ -896,9 +911,7 @@ def main():
         traceback.print_exc()
         prev = old_meta.get("lapisan", {}).get("ispu", {})
         meta["lapisan"]["ispu"] = {**prev, "ok": False, "galat": str(e)[:200]}
-        if not (LIVE / "ispu.geojson").exists():
-            lama = load_previous("ispu.geojson")
-            (LIVE / "ispu.geojson").write_text(json.dumps(lama if lama.get("features") else fc([])), encoding="utf-8")
+        pertahankan("ispu.geojson", fc([]))
 
     print("- berita terkait laporan ...")
     try:
@@ -911,8 +924,7 @@ def main():
     except Exception as e:
         traceback.print_exc()
         meta["lapisan"]["berita_laporan"] = {"ok": False, "galat": str(e)[:200]}
-        if not (LIVE / "berita_laporan.json").exists():
-            (LIVE / "berita_laporan.json").write_text("{}", encoding="utf-8")
+        pertahankan("berita_laporan.json", {})
 
     print("- arsip RSS media ...")
     try:
