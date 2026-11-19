@@ -544,6 +544,8 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  /* Kecuali garis progres ticker: gerak pelan & lurus (aman), dan jadi penanda kapan kabar berganti */
+  .tk-progress i.run { animation-duration: var(--dur, 6s) !important; }
 }
 
 /* Layar sentuh: efek hover "nyangkut" setelah jari diangkat (mis. abu-abu di dock) -> matikan */
