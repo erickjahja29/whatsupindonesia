@@ -12,6 +12,7 @@ Langkah per citra:
  3. Koreksi parallax: awan tinggi tampak bergeser menjauhi titik bawah satelit (140,7° BT); digeser balik.
  4. Frame terbaru: gerak awan dari dua citra berurutan -> hujan digeser ke posisi perkiraan "sekarang".
  5. Koreksi pengamatan bandara (METAR): di sekitar bandara (L = 15 km) perkiraan ditarik ke laporan bandara.
+ 6. Hanya daratan Indonesia (+±5 km pantai): hujan di laut tidak ditampilkan.
 Keluaran (nginx /data/hujan/): <waktu>.png (abu-abu: mm/jam = (v/40)^2) + hujan.json (daftar frame, batas peta, bandara).
 """
 import io
@@ -28,7 +29,8 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fetch_data import BBOX, METAR_URL, nilai_hujan_metar  # noqa: E402
+from fetch_data import BBOX, DATA, METAR_URL, nilai_hujan_metar  # noqa: E402
+from geo import iter_polygons  # noqa: E402
 
 KELUAR = Path(os.environ.get("WUI_HUJAN", "/var/www/wui/data/hujan"))
 VALIDASI = Path(os.environ.get("WUI_HUJAN_VALIDASI", "/opt/wui/hujan_validasi.jsonl"))   # catatan akurasi (tidak publik)
@@ -277,6 +279,25 @@ def catat_validasi(t, R, stasiun):
         pass
 
 
+def masker_darat():
+    """Daratan Indonesia (poligon kabupaten/kota) di grid citra, dilebarkan ±1 piksel (±5 km) agar pantai ikut.
+    Hujan di laut tidak ditampilkan: fokus pada daerah tempat orang berada."""
+    from PIL import ImageDraw
+    img = Image.new("L", (W, H), 0)
+    d = ImageDraw.Draw(img)
+    gj = json.loads((DATA / "wilayah.geojson").read_text(encoding="utf-8"))
+    for f in gj["features"]:
+        for poly in iter_polygons(f["geometry"]):
+            pts = [px_dari(lon, lat) for lon, lat in poly[0]]
+            if len(pts) >= 3:
+                d.polygon(pts, fill=1)
+    m = np.asarray(img, dtype=bool)
+    return np.logical_or.reduce([m] + [np.roll(m, sh, ax) for sh in (-1, 1) for ax in (0, 1)])
+
+
+DARAT = None
+
+
 # ---------------------------------------------------------------- utama
 def simpan_png(R, path):
     v = np.clip(np.rint(np.sqrt(np.maximum(R, 0)) * 40), 0, 255).astype(np.uint8)
@@ -306,6 +327,10 @@ def proses(t, t_sebelum, terbaru, stasiun):
     R, pakai = koreksi_bandara(R, stasiun, t_citra)
     info["sah"] = t_citra.strftime("%Y-%m-%dT%H:%M:%SZ")
     info["png"] = f"{t}.png"
+    global DARAT
+    if DARAT is None:
+        DARAT = masker_darat()
+    R = np.where(DARAT, R, 0)
     simpan_png(R, KELUAR / info["png"])
     info["persen_hujan"] = round(float((R >= 0.3).mean()) * 100, 2)
     return info, pakai

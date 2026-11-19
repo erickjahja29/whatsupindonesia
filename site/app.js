@@ -2386,6 +2386,9 @@
     for (const pt of RT.p) {
       if (pt.mati || --pt.umur < 0) { lahirRintik(pt, false); if (pt.mati) continue; }
       pt.y += pt.v; pt.x -= pt.v * 0.18;
+      // rintik yang jatuh keluar dari daerah hujan (mis. ke laut) dilahirkan ulang, tidak digambar
+      const gx = (pt.x / RT.sel) | 0, gy = (pt.y / RT.sel) | 0, g = RT.grid;
+      if (gx < 0 || gy < 0 || gx >= g.nx || gy >= g.ny || !g.kelas[gy * g.nx + gx]) { lahirRintik(pt, false); continue; }
       const L = lapis[pt.a < 0.6 ? 0 : pt.a < 0.8 ? 1 : 2];
       L.moveTo(pt.x, pt.y); L.lineTo(pt.x + pt.l * 0.18, pt.y - pt.l);
     }
