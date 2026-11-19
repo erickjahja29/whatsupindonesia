@@ -2223,8 +2223,8 @@
   });
 
   // ---------- hujan: "di mana sedang hujan sekarang" dari robot VPS (scripts/hujan.py) ----------
-  // Robot (tiap citra baru, ±10 menit): suhu puncak awan Himawari-9 (JMA) → intensitas hujan (Auto-Estimator),
-  // saringan awan cirrus (inti konvektif + pantulan siang), koreksi parallax, digeser mengikuti gerak awan ke "sekarang",
+  // Robot (tiap citra baru, ±10 menit): suhu puncak awan Himawari-9 (JMA) → intensitas hujan (ambang −25 °C dikalibrasi METAR),
+  // koreksi parallax, digeser mengikuti gerak awan ke "sekarang",
   // lalu dikoreksi laporan cuaca bandara (METAR). Hasil: PNG abu-abu (mm/jam = (nilai/40)²) → di sini diwarnai
   // per kelas + animasi rintik hujan di daerah yang sedang hujan.
   const HUJAN_URL = "https://data.whatsupindonesia.id/data/hujan/";
