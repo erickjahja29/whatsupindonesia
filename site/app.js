@@ -2431,6 +2431,7 @@
     $("#hujan-btn")?.setAttribute("aria-pressed", String(state.hujan));
     const leg = $("#legenda-hujan");
     if (leg) leg.hidden = !state.hujan;
+    document.body.classList.toggle("hujan-on", !!state.hujan);
     if (!state.mapReady || !map.getSource("hujan-0")) return;
     for (let k = 0; k < HJ_FRAME; k++) map.setLayoutProperty(`hujan-${k}`, "visibility", state.hujan ? "visible" : "none");
     if (!state.hujan) { clearTimeout(HJ.timer); aturRintik(); return; }
