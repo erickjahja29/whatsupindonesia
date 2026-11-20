@@ -444,6 +444,10 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
   transition: color .2s, background .2s, opacity .2s; }
 .maplibregl-ctrl-group .ctrl-sembunyi:hover { opacity: 1; }
 .maplibregl-ctrl-group .ctrl-sembunyi[aria-pressed="true"] { opacity: 1; color: #fff; background: #475569; }
+.maplibregl-ctrl-group .ctrl-hujan { display: grid; place-items: center; font-size: 17px; color: var(--text); opacity: .8;
+  transition: color .2s, background .2s, opacity .2s; }
+.maplibregl-ctrl-group .ctrl-hujan:hover { opacity: 1; }
+.maplibregl-ctrl-group .ctrl-hujan[aria-pressed="true"] { opacity: 1; color: #fff; background: #0284c7; }
 /* Legenda polusi udara (muncul saat tombol aktif) */
 .legenda-udara { background: var(--glass); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--stroke); border-radius: 14px; padding: 9px 11px; color: var(--text); font-size: 11px;
@@ -609,7 +613,7 @@ body.mode-on .ticker { left: calc(50% + 205px); width: min(520px, calc(100vw - 4
 body.kartu #ticker, body.kartu #dock, body.kartu #show-list, body.kartu #panel,
 body.kartu .brand .icon-btn, body.kartu #updated, body.kartu .maplibregl-ctrl-top-right,
 body.kartu .maplibregl-ctrl-bottom-right .maplibregl-ctrl-group, body.kartu .ctrl-sembunyi,
-body.kartu .ctrl-angin, body.kartu .ctrl-udara, body.kartu .tur { display: none !important; }
+body.kartu .ctrl-angin, body.kartu .ctrl-udara, body.kartu .ctrl-hujan, body.kartu .tur { display: none !important; }
 body.kartu .brand-row::after { content: "whatsupindonesia.id"; margin-left: auto; font-size: 12px; font-weight: 600; opacity: .7; }
 body.kartu .pop .ptabs { display: none !important; }
 body.kartu .pop .ppane[data-t="d"] { display: block !important; }
@@ -619,3 +623,22 @@ body.kartu .maplibregl-popup { position: fixed !important; transform: none !impo
   right: 16px !important; bottom: 16px !important; max-width: none !important; }
 body.kartu .maplibregl-popup-tip, body.kartu .maplibregl-popup-close-button, body.kartu .pop .src { display: none !important; }
 body.kartu .maplibregl-popup-content, body.kartu .pop { max-height: none !important; }
+/* Legenda hujan: daftar kelas + tombol putar/jeda animasi & jam citra satelit */
+.legenda-hujan .lh-bar { display: flex; align-items: center; gap: 6px; margin-top: 7px; padding-top: 6px;
+  border-top: 1px solid var(--line); color: var(--muted); }
+.legenda-hujan .lh-main { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); background: transparent;
+  color: inherit; font-size: 10px; line-height: 1; cursor: pointer; flex: none; padding: 0; }
+.legenda-hujan #lh-waktu { font-size: 11px; line-height: 1.25; }
+@media (max-width: 640px) {   /* HP: legenda hujan juga memanjang di atas dock, agar tidak menutupi popup detail */
+  .legenda-hujan { position: fixed; left: 8px; right: 8px; bottom: var(--dock-h, 96px); margin: 0;
+    padding: 6px 10px 5px; font-size: 9.5px; border-radius: 12px; z-index: 3; }
+  .legenda-hujan .lu-judul { display: none; }
+  .legenda-hujan ul { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px 8px; }
+  .legenda-hujan li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .legenda-hujan li span { width: 7px; height: 7px; }
+  .legenda-hujan .lh-bar { margin-top: 5px; padding-top: 4px; gap: 6px; }
+  .legenda-hujan .lh-main { width: 20px; height: 20px; }
+  .legenda-hujan #lh-waktu { font-size: 10px; }
+  body.hujan-on .show-list, body.hujan-on .panel { bottom: calc(var(--dock-h, 96px) + 82px); }
+  body.hujan-on .maplibregl-ctrl-bottom-right { bottom: calc(var(--ctrl-bottom, 0px) + 78px); }   /* tombol peta & info naik */
+}

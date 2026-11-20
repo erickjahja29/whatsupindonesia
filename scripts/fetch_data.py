@@ -631,6 +631,58 @@ ISPU_ZONA = {"WIB": 7, "WITA": 8, "WIT": 9}
 ISPU_PARAM = {"pm25": "PM2.5", "pm10": "PM10", "so2": "SO2", "co": "CO", "o3": "O3", "no2": "NO2", "hc": "HC"}
 
 
+METAR_URL = ("https://aviationweather.gov/api/data/metar?bbox={1},{0},{3},{2}&format=json&hours=3")
+# kode cuaca METAR -> intensitas hujan di bandara (perkiraan mm/jam): ringan, sedang, lebat, sangat lebat
+_HUJAN_KODE = ("RA", "DZ", "SH", "TS", "GR", "GS", "UP")
+
+
+def nilai_hujan_metar(wx):
+    """Ubah kode cuaca METAR (mis. '-RA', 'TSRA', '+SHRA VCTS') jadi (mm/jam perkiraan, label, petir di sekitar)."""
+    wx = (wx or "").upper()
+    sekitar = "VCTS" in wx or "VCSH" in wx or "TS" in wx.split()
+    mm, label = 0.0, "Tidak hujan"
+    for tok in wx.split():
+        if tok.startswith("VC") or not any(k in tok for k in _HUJAN_KODE):
+            continue
+        if tok in ("TS",):                      # guntur tanpa hujan di bandara
+            continue
+        ringan, lebat, badai = tok.startswith("-"), tok.startswith("+"), "TS" in tok
+        if "DZ" in tok and "RA" not in tok:
+            v, l = 0.5, "Gerimis"
+        elif badai:
+            v, l = (25.0, "Hujan badai lebat") if lebat else (10.0, "Hujan badai")
+        elif lebat:
+            v, l = 10.0, "Hujan lebat"
+        elif ringan:
+            v, l = 1.0, "Hujan ringan"
+        else:
+            v, l = 4.0, "Hujan sedang"
+        if v > mm:
+            mm, label = v, l
+    return mm, label, sekitar
+
+
+def fetch_metar():
+    """Pengamatan cuaca bandara (METAR) 3 jam terakhir dari NOAA Aviation Weather Center.
+    (Robot hujan scripts/hujan.py memakai METAR_URL & nilai_hujan_metar langsung.)"""
+    data = json.loads(get(METAR_URL.format(*BBOX), timeout=40))
+    st = {}
+    for m in data:
+        if not str(m.get("icaoId", "")).startswith("W") or m.get("lat") is None or not m.get("reportTime"):
+            continue                              # hanya bandara Indonesia/Malaysia/Singapura/Brunei (kode W...)
+        mm, label, sekitar = nilai_hujan_metar(m.get("wxString"))
+        s_ = st.setdefault(m["icaoId"], {"id": m["icaoId"], "nama": re.sub(r",.*$", "", m.get("name") or m["icaoId"]),
+                                          "lat": round(m["lat"], 4), "lon": round(m["lon"], 4), "obs": []})
+        s_["obs"].append({"t": m["reportTime"][:19] + "Z", "mm": mm, "label": label, "sekitar": sekitar,
+                          "wx": m.get("wxString") or "", "awan": m.get("cover") or "", "raw": m.get("rawOb") or ""})
+    for s_ in st.values():
+        s_["obs"].sort(key=lambda o: o["t"], reverse=True)
+        s_["obs"] = s_["obs"][:8]
+    stasiun = sorted(st.values(), key=lambda x: x["id"])
+    return {"diambil": iso(NOW), "stasiun": stasiun}, {"jumlah_stasiun": len(stasiun),
+                                                        "hujan": sum(1 for x in stasiun if x["obs"][0]["mm"] > 0)}
+
+
 def fetch_ispu():
     """Stasiun pemantau kualitas udara resmi (ISPU, Kementerian Lingkungan Hidup), nilai per jam.
     Data sama dengan peta ispu.kemenlh.go.id / aplikasi ISPUNet."""
