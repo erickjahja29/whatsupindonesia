@@ -123,8 +123,10 @@ def perbarui_token():
         log("GAGAL memperbarui token Threads:", type(e).__name__, str(e)[:200])
 
 
-def terbitkan(teks, url_gambar):
-    cid = panggil("me/threads", {"media_type": "IMAGE", "image_url": url_gambar, "text": teks})["id"]
+def terbitkan(teks, url_gambar=None):
+    """Posting 1 Threads: dengan gambar (url publik) atau teks saja bila url_gambar kosong."""
+    media = {"media_type": "IMAGE", "image_url": url_gambar} if url_gambar else {"media_type": "TEXT"}
+    cid = panggil("me/threads", {**media, "text": teks})["id"]
     for _ in range(24):                       # tunggu Threads selesai mengambil gambar (maks ±2 menit)
         time.sleep(5)
         st = panggil(cid, {"fields": "status,error_message"}, post=False)
