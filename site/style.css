@@ -639,6 +639,6 @@ body.kartu .maplibregl-popup-content, body.kartu .pop { max-height: none !import
   .legenda-hujan .lh-bar { margin-top: 5px; padding-top: 4px; gap: 6px; }
   .legenda-hujan .lh-main { width: 20px; height: 20px; }
   .legenda-hujan #lh-waktu { font-size: 10px; }
-  body.hujan-on .show-list, body.hujan-on .panel { bottom: calc(var(--dock-h, 96px) + 72px); }
-  body.hujan-on .maplibregl-ctrl-bottom-right { bottom: calc(var(--ctrl-bottom, 0px) + 72px); }   /* tombol peta & info naik */
+  body.hujan-on .show-list, body.hujan-on .panel { bottom: calc(var(--dock-h, 96px) + 82px); }
+  body.hujan-on .maplibregl-ctrl-bottom-right { bottom: calc(var(--ctrl-bottom, 0px) + 78px); }   /* tombol peta & info naik */
 }
