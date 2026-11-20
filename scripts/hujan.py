@@ -114,6 +114,35 @@ def hujan_dari_suhu(T):
     return np.minimum(R, 80).astype(np.float32)
 
 
+HANGAT_C, HANGAT_ALB, HANGAT_ELEV = 5.0, 190.0, 20.0
+
+
+def elevasi_matahari(t):
+    """Sudut tinggi matahari (derajat) di tiap piksel pada waktu citra t."""
+    w = datetime.strptime(t, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc) + timedelta(minutes=6)
+    hari = w.timetuple().tm_yday
+    dek = np.radians(-23.44 * math.cos(2 * math.pi / 365 * (hari + 10)))
+    sudut_jam = np.radians(15 * (w.hour + w.minute / 60 + LON / 15 - 12))
+    la = np.radians(LAT)
+    return np.degrees(np.arcsin(np.sin(la) * np.sin(dek) + np.cos(la) * np.cos(dek) * np.cos(sudut_jam)))
+
+
+def hujan_awan_hangat(t, T):
+    """Siang hari: awan tebal (sangat terang di kanal tampak B03) yang puncaknya 'hangat' (< 5 °C) sering
+    menurunkan hujan ringan, terutama di pegunungan (mis. Bromo), dan luput dari ambang IR −25 °C.
+    Kecerahan dinormalkan dengan sudut matahari lalu dirata-rata 3×3 piksel.
+    Kalibrasi METAR siang 18–20 Nov 2026 (351 pasangan): CSI 0,48 → 0,50, POD 0,76 → 0,90, FAR 0,44 → 0,47
+    (ambang 190, sedikit di bawah optimum 195–200, supaya hujan orografis seperti di Bromo 20 Nov 10.20 WIB ikut tertangkap)."""
+    el = elevasi_matahari(t)
+    if el.max() < HANGAT_ELEV:
+        return np.zeros_like(T)
+    A = mosaik(t, "B03", "ALBD") / np.sin(np.radians(np.clip(el, HANGAT_ELEV, 90)))
+    p = np.pad(A, 1, mode="edge")
+    A = sum(p[1 + dy:1 + dy + H, 1 + dx:1 + dx + W] for dy in (-1, 0, 1) for dx in (-1, 0, 1)) / 9
+    ya = (T < HANGAT_C) & (A >= HANGAT_ALB) & (el >= HANGAT_ELEV)
+    return np.where(ya, 0.5 + 1.0 * np.clip((A - HANGAT_ALB) / 60, 0, 1), 0).astype(np.float32)
+
+
 def koreksi_parallax(R, T):
     """Geser hujan dari posisi tampak (awan tinggi) ke posisi di atas tanah."""
     tinggi = np.clip((27 - T) / 6.5, 0, 17)                            # km, laju penurunan suhu 6,5 °C/km
@@ -319,6 +348,10 @@ def proses(t, t_sebelum, terbaru, stasiun):
     T = suhu(abu)
     R = hujan_dari_suhu(T)
     R = koreksi_parallax(R, T)
+    try:
+        R = np.maximum(R, hujan_awan_hangat(t, T))
+    except Exception as e:                       # kanal B03 gagal diunduh: tetap pakai IR saja
+        log("B03 gagal:", e)
     if terbaru:
         catat_validasi(t, R, stasiun)
     info = {"t": datetime.strptime(t, "%Y%m%d%H%M%S").strftime("%Y-%m-%dT%H:%M:%SZ")}
