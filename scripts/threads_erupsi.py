@@ -1,6 +1,6 @@
 """Robot Threads What'sUpIndonesia: setiap erupsi gunung api baru dari MAGMA-VEN (Badan Geologi/PVMBG)
 -> 1 posting Threads (foto resmi saat erupsi bila ada + teks ringkas).
-Per gunung hanya erupsi PERTAMA dalam 24 jam yang diposting, kecuali erupsi gawat (lihat pilih()).
+Per gunung: posting pertama, lalu hanya bila status naik atau rekomendasi PVMBG berubah (lihat pilih()).
 
 Jalan terus di VPS (systemd `wui-threads-erupsi`), cek MAGMA tiap 60 detik.
 Memakai token & fungsi Threads dari threads_gempa.py (token diperbarui oleh robot gempa, bukan di sini).
@@ -34,10 +34,10 @@ GUNUNG = os.environ.get("WUI_GUNUNG", "https://data.whatsupindonesia.id/data/liv
 JEDA_CEK = 60                       # detik antar-cek MAGMA
 UMUR_MAKS = timedelta(hours=3)      # erupsi lebih tua dari ini tidak diposting
 MAKS_PER_HARI = 30                  # pengaman
-JENDELA = timedelta(hours=24)       # per gunung: hanya erupsi PERTAMA dalam 24 jam yang diposting ...
-GAWAT_KOLOM_M = 2000                # ... kecuali erupsi gawat: kolom abu >= 2.000 m di atas puncak,
-GAWAT_KALI = 2.0                    #     kolom >= 2x kolom tertinggi yang sudah diposting (dan >= 1.000 m),
-#                                         status gunung naik, atau ada awan panas.
+# Aturan posting per gunung (untuk kesadaran masyarakat, bukan setiap letusan):
+#   1. gunung belum pernah kita posting -> posting erupsi terbarunya;
+#   2. status level naik dibanding erupsi sebelumnya -> posting;
+#   3. rekomendasi PVMBG berubah (jarak/radius bahaya berganti) -> posting.
 ZONA = {"WIB": 7, "WITA": 8, "WIT": 9}
 BULAN_ID = {b: i + 1 for i, b in enumerate("januari februari maret april mei juni juli agustus september oktober "
                                            "november desember".split())}
@@ -120,7 +120,7 @@ def teks_erupsi(e, g, alasan=None, ke=1):
     lok = singkat_lokasi((g or {}).get("lokasi"))
     baris = [f"🌋 Erupsi G. {e['nama']}" + (f" · {lok}" if lok else ""), f"🕓 {e['jam_lokal']}"]
     if alasan:
-        baris.append(f"🔺 {alasan} · erupsi ke-{ke} dalam 24 jam")
+        baris.append(f"🔺 {alasan}" + (f" · erupsi ke-{ke} dalam 24 jam" if ke > 1 else ""))
     if e.get("kolom_m"):
         k = f"💨 Kolom abu ±{angka(e['kolom_m'])} m di atas puncak (±{angka(e['kolom_mdpl'])} mdpl)"
         if e.get("arah"):
@@ -135,9 +135,22 @@ def teks_erupsi(e, g, alasan=None, ke=1):
         baris.append("📈 Saat laporan dibuat, erupsi masih berlangsung")
     if g and g.get("level") in LEVEL:
         baris.append(f"⚠️ Status {LEVEL[g['level']]}")
-    baris += ["", "Peta gunung api & status terkini 👇", "whatsupindonesia.id",
-              "Sumber" + (" & foto" if e.get("foto") else "") + ": PVMBG / MAGMA Indonesia"]
-    return "\n".join(baris)
+    akhir = ["", "Peta gunung api & status terkini 👇", "whatsupindonesia.id",
+             "Sumber" + (" & foto" if e.get("foto") else "") + ": PVMBG / MAGMA Indonesia"]
+    # rekomendasi utama (yang menyebut radius bahaya), dipotong agar total < 500 karakter (emoji bisa dihitung 2)
+    JARAK = r"\d+(?:[.,]\d+)?\s*(?:km|kilometer|meter)\b"
+    poin = [p.strip().rstrip("…") for r in (g or {}).get("rekomendasi") or [] for p in re.split(r"\(\d\)", r) if p.strip()]
+    rek = next((p for p in poin if re.search(JARAK, p, re.I)), None)
+    sisa = 470 - len("\n".join(baris + akhir)) - len("\n📢 ")
+    if rek and sisa >= 60:
+        if len(rek) > sisa:                  # usahakan berhenti tepat setelah jarak bahaya pertama disebut
+            m = re.search(JARAK, rek, re.I)
+            k = re.compile(r"[,.;](?=\s|$)").search(rek, m.end())   # tanda baca akhir klausa (bukan titik desimal)
+            j = k.start() if k else len(rek)
+            rek = rek[:j] if j <= sisa else rek[:sisa - 1].rsplit(" ", 1)[0].rstrip(",;")
+            rek = rek.rstrip(",;.") + "…"
+        baris.append(f"📢 {rek}")
+    return "\n".join(baris + akhir)
 
 
 # ---------------------------------------------------------------- state & inti
@@ -177,26 +190,28 @@ def kolom(x):
         return 0.0
 
 
+def tanda_rekom(g):
+    """Ciri rekomendasi PVMBG: semua jarak bahaya yang disebut (mis. '5km 13km 500m'). Berubah = rekomendasi berubah."""
+    teks = " ".join((g or {}).get("rekomendasi") or [])
+    jarak = re.findall(r"(\d+(?:[.,]\d+)?)\s*(km|kilometer|meter)\b", teks, re.I)
+    return " ".join(sorted({a.replace(",", ".") + ("km" if b.lower().startswith("k") else "m") for a, b in jarak}))
+
+
 def pilih(e, g, st):
-    """(posting?, alasan_gawat, erupsi_ke) untuk erupsi e, dilihat dari catatan gunung yang sama 24 jam terakhir."""
+    """(posting?, alasan, erupsi_ke_dalam_24_jam) untuk erupsi e — lihat aturan di atas."""
     t = datetime.fromisoformat(e["waktu"].replace("Z", "+00:00"))
-    lalu = [c for c in st["erupsi"].values() if c.get("nama") == e["nama"]
-            and timedelta(0) <= t - datetime.fromisoformat(c["waktu"].replace("Z", "+00:00")) < JENDELA]
-    ke = len(lalu) + 1
-    tayang = [c for c in lalu if c.get("status") in ("terbit", "draf")]
-    if not tayang:
+    lalu = sorted((c for c in st["erupsi"].values() if c.get("nama") == e["nama"] and c["waktu"] <= e["waktu"]),
+                  key=lambda c: c["waktu"])
+    ke = 1 + sum(1 for c in lalu if t - datetime.fromisoformat(c["waktu"].replace("Z", "+00:00")) < timedelta(hours=24))
+    if not any(c.get("status") in ("terbit", "draf") for c in lalu):
         return True, None, ke
-    k = kolom(e)
-    k_maks = max(c.get("kolom", 0) for c in tayang)
-    lv, lv_lalu = (g or {}).get("level") or 0, max(c.get("level") or 0 for c in tayang)
-    if "awan panas" in e["teks"].lower():
-        return True, "Awan panas teramati", ke
-    if lv > lv_lalu > 0:
+    sebelum = lalu[-1]                      # dibanding erupsi terakhir gunung ini (diposting atau tidak)
+    lv = (g or {}).get("level") or 0
+    if lv > (sebelum.get("level") or 0) > 0:
         return True, f"Status naik ke {LEVEL.get(lv, lv)}", ke
-    if k >= GAWAT_KOLOM_M:
-        return True, f"Kolom abu tinggi (±{angka(str(int(k)))} m)", ke
-    if k >= 1000 and k >= GAWAT_KALI * max(k_maks, 1):
-        return True, "Erupsi lebih besar dari sebelumnya", ke
+    rk = tanda_rekom(g)
+    if rk and sebelum.get("rekom") and rk != sebelum["rekom"]:
+        return True, "Rekomendasi PVMBG berubah", ke
     return False, None, ke
 
 
@@ -216,7 +231,7 @@ def tangani(e, g, st, uji=False, alasan=None, ke=1):
     GAMBAR.mkdir(parents=True, exist_ok=True)
     (GAMBAR / f"erupsi_{e['id'][:8]}.txt").write_text(teks, encoding="utf-8")
     catatan = {"nama": e["nama"], "waktu": e["waktu"], "gambar": url_foto, "kolom": kolom(e),
-               "level": (g or {}).get("level"), "gawat": alasan,
+               "level": (g or {}).get("level"), "rekom": tanda_rekom(g), "alasan": alasan,
                "ditangani": kini().strftime("%Y-%m-%dT%H:%M:%SZ")}
     if uji or mode() != "terbit":
         catatan["status"] = "draf"
@@ -232,10 +247,10 @@ def tangani(e, g, st, uji=False, alasan=None, ke=1):
 
 
 def lewati(e, g, st, ke, uji=False):
-    """Erupsi lanjutan yang tidak gawat: dicatat (untuk hitungan 'erupsi ke-N'), tidak diposting."""
-    log(f"erupsi {e['nama']} {e['jam_lokal']}: lewati (erupsi ke-{ke} dalam 24 jam, tidak gawat)")
+    """Erupsi lanjutan tanpa perubahan status/rekomendasi: dicatat (untuk pembanding & 'erupsi ke-N'), tidak diposting."""
+    log(f"erupsi {e['nama']} {e['jam_lokal']}: lewati (erupsi ke-{ke} dalam 24 jam; status & rekomendasi tetap)")
     st["erupsi"][e["id"]] = {"nama": e["nama"], "waktu": e["waktu"], "kolom": kolom(e), "level": (g or {}).get("level"),
-                             "status": "lewati", "ditangani": kini().strftime("%Y-%m-%dT%H:%M:%SZ")}
+                             "rekom": tanda_rekom(g), "status": "lewati", "ditangani": kini().strftime("%Y-%m-%dT%H:%M:%SZ")}
     if not uji:
         simpan_state(st)
 
