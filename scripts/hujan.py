@@ -115,6 +115,27 @@ def hujan_dari_suhu(T):
 
 
 HANGAT_C, HANGAT_ALB, HANGAT_ELEV = 5.0, 190.0, 20.0
+# Pegunungan: hujan orografis turun dari awan yang lebih rendah & tipis. Ambang dilonggarkan bertahap
+# dari GUNUNG_MULAI m (tetap ambang dataran rendah) sampai GUNUNG_PENUH m (ambang paling longgar).
+GUNUNG_MULAI, GUNUNG_PENUH, GUNUNG_ALB, GUNUNG_C = 500.0, 2000.0, 130.0, 10.0
+DEM = Path(os.environ.get("WUI_DEM", "/opt/wui/dem_z5.npy"))
+TERRAIN = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"   # Mapzen/AWS Terrain Tiles
+
+
+def ketinggian():
+    """Ketinggian permukaan (m) di grid z5 yang sama dengan citra; diunduh sekali lalu disimpan."""
+    if DEM.exists():
+        return np.load(DEM)
+    D = np.zeros((H, W), dtype=np.float32)
+    for x in range(X0, X1 + 1):
+        for y in range(Y0, Y1 + 1):
+            a = np.asarray(Image.open(io.BytesIO(get(TERRAIN.format(z=Z, x=x, y=y)))).convert("RGB"), dtype=np.float32)
+            D[(y - Y0) * 256:(y - Y0 + 1) * 256, (x - X0) * 256:(x - X0 + 1) * 256] =                 a[..., 0] * 256 + a[..., 1] + a[..., 2] / 256 - 32768
+    try:
+        np.save(DEM, D)
+    except OSError:
+        pass
+    return D
 
 
 def elevasi_matahari(t):
@@ -132,15 +153,24 @@ def hujan_awan_hangat(t, T):
     menurunkan hujan ringan, terutama di pegunungan (mis. Bromo), dan luput dari ambang IR −25 °C.
     Kecerahan dinormalkan dengan sudut matahari lalu dirata-rata 3×3 piksel.
     Kalibrasi METAR siang 18–20 Nov 2026 (351 pasangan): CSI 0,48 → 0,50, POD 0,76 → 0,90, FAR 0,44 → 0,47
-    (ambang 190, sedikit di bawah optimum 195–200, supaya hujan orografis seperti di Bromo 20 Nov 10.20 WIB ikut tertangkap)."""
+    (ambang 190, sedikit di bawah optimum 195–200).
+    Di pegunungan ambang dilonggarkan (lihat GUNUNG_*): belum bisa diuji METAR (tak ada bandara di gunung), dasar awalnya
+    laporan lapangan hujan cukup deras di Tengger/Bromo ±2.000 m, 20 Nov 10.20 WIB (puncak awan +0..+5 °C, albedo 3×3 ±140)."""
     el = elevasi_matahari(t)
     if el.max() < HANGAT_ELEV:
         return np.zeros_like(T)
     A = mosaik(t, "B03", "ALBD") / np.sin(np.radians(np.clip(el, HANGAT_ELEV, 90)))
     p = np.pad(A, 1, mode="edge")
     A = sum(p[1 + dy:1 + dy + H, 1 + dx:1 + dx + W] for dy in (-1, 0, 1) for dx in (-1, 0, 1)) / 9
-    ya = (T < HANGAT_C) & (A >= HANGAT_ALB) & (el >= HANGAT_ELEV)
-    return np.where(ya, 0.5 + 1.0 * np.clip((A - HANGAT_ALB) / 60, 0, 1), 0).astype(np.float32)
+    try:
+        f = np.clip((ketinggian() - GUNUNG_MULAI) / (GUNUNG_PENUH - GUNUNG_MULAI), 0, 1)
+    except Exception as e:                       # peta ketinggian gagal: pakai ambang dataran rendah saja
+        log("DEM gagal:", e)
+        f = 0.0
+    amb_a = HANGAT_ALB - (HANGAT_ALB - GUNUNG_ALB) * f
+    amb_c = HANGAT_C + (GUNUNG_C - HANGAT_C) * f
+    ya = (T < amb_c) & (A >= amb_a) & (el >= HANGAT_ELEV)
+    return np.where(ya, 0.5 + 1.0 * np.clip((A - amb_a) / 60, 0, 1), 0).astype(np.float32)
 
 
 def koreksi_parallax(R, T):
