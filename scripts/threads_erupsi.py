@@ -1,5 +1,6 @@
 """Robot Threads What'sUpIndonesia: setiap erupsi gunung api baru dari MAGMA-VEN (Badan Geologi/PVMBG)
 -> 1 posting Threads (foto resmi saat erupsi bila ada + teks ringkas).
+Per gunung hanya erupsi PERTAMA dalam 24 jam yang diposting, kecuali erupsi gawat (lihat pilih()).
 
 Jalan terus di VPS (systemd `wui-threads-erupsi`), cek MAGMA tiap 60 detik.
 Memakai token & fungsi Threads dari threads_gempa.py (token diperbarui oleh robot gempa, bukan di sini).
@@ -11,7 +12,7 @@ Folder kerja (FOLDER, sama dengan robot gempa, bawaan /opt/wui/threads):
 Pakai:
   python threads_erupsi.py              # jalan terus
   python threads_erupsi.py --sekali     # satu kali cek
-  python threads_erupsi.py --draf N     # buat draf untuk N erupsi terbaru (uji), tidak posting, tidak menyentuh state
+  python threads_erupsi.py --draf N     # simulasi aturan pada N halaman VEN terakhir (uji), tidak posting, tidak menyentuh state
 """
 import io
 import json
@@ -32,7 +33,11 @@ VEN = "https://magma.esdm.go.id/v1/gunung-api/informasi-letusan"
 GUNUNG = os.environ.get("WUI_GUNUNG", "https://data.whatsupindonesia.id/data/live/gunung_api.geojson")
 JEDA_CEK = 60                       # detik antar-cek MAGMA
 UMUR_MAKS = timedelta(hours=3)      # erupsi lebih tua dari ini tidak diposting
-MAKS_PER_HARI = 30                  # pengaman (Semeru & Ibu bisa ±15 erupsi/hari)
+MAKS_PER_HARI = 30                  # pengaman
+JENDELA = timedelta(hours=24)       # per gunung: hanya erupsi PERTAMA dalam 24 jam yang diposting ...
+GAWAT_KOLOM_M = 2000                # ... kecuali erupsi gawat: kolom abu >= 2.000 m di atas puncak,
+GAWAT_KALI = 2.0                    #     kolom >= 2x kolom tertinggi yang sudah diposting (dan >= 1.000 m),
+#                                         status gunung naik, atau ada awan panas.
 ZONA = {"WIB": 7, "WITA": 8, "WIT": 9}
 BULAN_ID = {b: i + 1 for i, b in enumerate("januari februari maret april mei juni juli agustus september oktober "
                                            "november desember".split())}
@@ -111,9 +116,11 @@ def angka(s):
         return s
 
 
-def teks_erupsi(e, g):
+def teks_erupsi(e, g, alasan=None, ke=1):
     lok = singkat_lokasi((g or {}).get("lokasi"))
     baris = [f"🌋 Erupsi G. {e['nama']}" + (f" · {lok}" if lok else ""), f"🕓 {e['jam_lokal']}"]
+    if alasan:
+        baris.append(f"🔺 {alasan} · erupsi ke-{ke} dalam 24 jam")
     if e.get("kolom_m"):
         k = f"💨 Kolom abu ±{angka(e['kolom_m'])} m di atas puncak (±{angka(e['kolom_mdpl'])} mdpl)"
         if e.get("arah"):
@@ -163,7 +170,37 @@ def simpan_foto(url, nama):
     return URL_GAMBAR + f.name
 
 
-def tangani(e, g, st, uji=False):
+def kolom(x):
+    try:
+        return float(str(x.get("kolom_m") or 0).replace(".", "").replace(",", "."))
+    except ValueError:
+        return 0.0
+
+
+def pilih(e, g, st):
+    """(posting?, alasan_gawat, erupsi_ke) untuk erupsi e, dilihat dari catatan gunung yang sama 24 jam terakhir."""
+    t = datetime.fromisoformat(e["waktu"].replace("Z", "+00:00"))
+    lalu = [c for c in st["erupsi"].values() if c.get("nama") == e["nama"]
+            and timedelta(0) <= t - datetime.fromisoformat(c["waktu"].replace("Z", "+00:00")) < JENDELA]
+    ke = len(lalu) + 1
+    tayang = [c for c in lalu if c.get("status") in ("terbit", "draf")]
+    if not tayang:
+        return True, None, ke
+    k = kolom(e)
+    k_maks = max(c.get("kolom", 0) for c in tayang)
+    lv, lv_lalu = (g or {}).get("level") or 0, max(c.get("level") or 0 for c in tayang)
+    if "awan panas" in e["teks"].lower():
+        return True, "Awan panas teramati", ke
+    if lv > lv_lalu > 0:
+        return True, f"Status naik ke {LEVEL.get(lv, lv)}", ke
+    if k >= GAWAT_KOLOM_M:
+        return True, f"Kolom abu tinggi (±{angka(str(int(k)))} m)", ke
+    if k >= 1000 and k >= GAWAT_KALI * max(k_maks, 1):
+        return True, "Erupsi lebih besar dari sebelumnya", ke
+    return False, None, ke
+
+
+def tangani(e, g, st, uji=False, alasan=None, ke=1):
     log(f"erupsi {e['nama']} {e['jam_lokal']} ({e['id'][:8]}) ...")
     url_foto = None
     for coba in range(3):                       # DNS/server MAGMA kadang gagal sesaat
@@ -175,10 +212,11 @@ def tangani(e, g, st, uji=False):
         except Exception as x:
             log(f"  foto gagal (percobaan {coba + 1}):", type(x).__name__, str(x)[:120])
             time.sleep(5)
-    teks = teks_erupsi({**e, "foto": url_foto}, g)   # "Sumber & foto" hanya bila foto benar-benar ikut
+    teks = teks_erupsi({**e, "foto": url_foto}, g, alasan, ke)   # "Sumber & foto" hanya bila foto benar-benar ikut
     GAMBAR.mkdir(parents=True, exist_ok=True)
     (GAMBAR / f"erupsi_{e['id'][:8]}.txt").write_text(teks, encoding="utf-8")
-    catatan = {"nama": e["nama"], "waktu": e["waktu"], "gambar": url_foto,
+    catatan = {"nama": e["nama"], "waktu": e["waktu"], "gambar": url_foto, "kolom": kolom(e),
+               "level": (g or {}).get("level"), "gawat": alasan,
                "ditangani": kini().strftime("%Y-%m-%dT%H:%M:%SZ")}
     if uji or mode() != "terbit":
         catatan["status"] = "draf"
@@ -187,10 +225,19 @@ def tangani(e, g, st, uji=False):
         pid, link = terbitkan(teks, url_foto)
         catatan.update(status="terbit", threads_id=pid, permalink=link)
         log("  TERBIT:", link or pid)
+    st["erupsi"][e["id"]] = catatan
     if not uji:
-        st["erupsi"][e["id"]] = catatan
         simpan_state(st)
     return teks
+
+
+def lewati(e, g, st, ke, uji=False):
+    """Erupsi lanjutan yang tidak gawat: dicatat (untuk hitungan 'erupsi ke-N'), tidak diposting."""
+    log(f"erupsi {e['nama']} {e['jam_lokal']}: lewati (erupsi ke-{ke} dalam 24 jam, tidak gawat)")
+    st["erupsi"][e["id"]] = {"nama": e["nama"], "waktu": e["waktu"], "kolom": kolom(e), "level": (g or {}).get("level"),
+                             "status": "lewati", "ditangani": kini().strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if not uji:
+        simpan_state(st)
 
 
 def cek(st):
@@ -208,7 +255,12 @@ def cek(st):
             log("batas harian tercapai, erupsi ditunda:", e["nama"], e["waktu"])
             break
         try:
-            tangani(e, gunung.get(e["nama"].lower()), st)
+            g = gunung.get(e["nama"].lower())
+            pos, alasan, ke = pilih(e, g, st)
+            if not pos:
+                lewati(e, g, st, ke)
+                continue
+            tangani(e, g, st, alasan=alasan, ke=ke)
             sehari += st["erupsi"][e["id"]].get("status") == "terbit"
         except Exception as x:
             log("  GAGAL:", type(x).__name__, str(x)[:300])   # dicoba lagi pada cek berikutnya
@@ -217,11 +269,19 @@ def cek(st):
 def main():
     FOLDER.mkdir(parents=True, exist_ok=True)
     if "--draf" in sys.argv:
+        # uji: simulasi aturan pada N halaman VEN terakhir (urut waktu), tidak posting, tidak menyentuh state
         n = int(sys.argv[sys.argv.index("--draf") + 1])
         gunung = info_gunung()
-        for e in baca_ven(get(VEN).decode("utf-8", "replace"))[:n]:
-            print("-" * 40)
-            print(tangani(e, gunung.get(e["nama"].lower()), {}, uji=True))
+        daftar = [e for h in range(1, n + 1) for e in baca_ven(get(f"{VEN}?page={h}").decode("utf-8", "replace"))]
+        st = {"erupsi": {}}
+        for e in sorted({e["id"]: e for e in daftar}.values(), key=lambda x: x["waktu"]):
+            g = gunung.get(e["nama"].lower())
+            pos, alasan, ke = pilih(e, g, st)
+            if pos:
+                print("-" * 40)
+                print(tangani(e, g, st, uji=True, alasan=alasan, ke=ke))
+            else:
+                lewati(e, g, st, ke, uji=True)
         return
     st = baca_state()
     simpan_state(st)
