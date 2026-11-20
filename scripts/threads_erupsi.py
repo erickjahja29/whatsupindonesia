@@ -26,7 +26,8 @@ from html import unescape
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from threads_gempa import FOLDER, GAMBAR, URL_GAMBAR, kini, log, terbitkan  # noqa: E402
+from fetch_data import _antara, _teks  # noqa: E402
+from threads_gempa import FOLDER, GAMBAR, URL_GAMBAR, kini, log, panggil, terbitkan  # noqa: E402
 from threads_teks import SINGKAT_PROV, BULAN  # noqa: E402
 
 VEN = "https://magma.esdm.go.id/v1/gunung-api/informasi-letusan"
@@ -137,20 +138,51 @@ def teks_erupsi(e, g, alasan=None, ke=1):
         baris.append(f"⚠️ Status {LEVEL[g['level']]}")
     akhir = ["", "Peta gunung api & status terkini 👇", "whatsupindonesia.id",
              "Sumber" + (" & foto" if e.get("foto") else "") + ": PVMBG / MAGMA Indonesia"]
-    # rekomendasi utama (yang menyebut radius bahaya), dipotong agar total < 500 karakter (emoji bisa dihitung 2)
-    JARAK = r"\d+(?:[.,]\d+)?\s*(?:km|kilometer|meter)\b"
-    poin = [p.strip().rstrip("…") for r in (g or {}).get("rekomendasi") or [] for p in re.split(r"\(\d\)", r) if p.strip()]
-    rek = next((p for p in poin if re.search(JARAK, p, re.I)), None)
-    sisa = 470 - len("\n".join(baris + akhir)) - len("\n📢 ")
-    if rek and sisa >= 60:
-        if len(rek) > sisa:                  # usahakan berhenti tepat setelah jarak bahaya pertama disebut
-            m = re.search(JARAK, rek, re.I)
-            k = re.compile(r"[,.;](?=\s|$)").search(rek, m.end())   # tanda baca akhir klausa (bukan titik desimal)
-            j = k.start() if k else len(rek)
-            rek = rek[:j] if j <= sisa else rek[:sisa - 1].rsplit(" ", 1)[0].rstrip(",;")
-            rek = rek.rstrip(",;.") + "…"
-        baris.append(f"📢 {rek}")
-    return "\n".join(baris + akhir)
+    # rekomendasi utama (yang menyebut radius bahaya): utuh di posting bila muat (< 500 karakter; emoji bisa
+    # dihitung 2), kalau kepanjangan -> semua rekomendasi PVMBG dipindah ke komentar di bawah posting.
+    poin = rekomendasi_lengkap(g)
+    rek = next((p for p in poin if re.search(r"\d+(?:[.,]\d+)?\s*(?:km|kilometer|meter)\b", p, re.I)), None)
+    komentar = []
+    if rek:
+        if len("\n".join(baris + [f"📢 {rek}"] + akhir)) <= 470:
+            baris.append(f"📢 {rek}")
+        else:
+            baris.append("📢 Rekomendasi PVMBG ada di komentar 👇")
+            komentar = potong_komentar(f"📢 Rekomendasi PVMBG untuk G. {e['nama']}:", poin)
+    return "\n".join(baris + akhir), komentar
+
+
+def rekomendasi_lengkap(g):
+    """Semua poin rekomendasi dari laporan aktivitas MAGMA terbaru (utuh); cadangan: versi ringkas di peta kita."""
+    if g and g.get("tautan"):
+        try:
+            t = _teks(get(g["tautan"]).decode("utf-8", "replace"))
+            rek = _antara(t, "Rekomendasi", ["Laporan Aktivitas Lainnya", "Tweet", "Copyright", "©"], maks=5000) or ""
+            poin = [re.sub(r"^(?:\d{1,2}\.|\(\d{1,2}\))\s*", "", x).strip()
+                    for x in re.split(r"\s(?=\d{1,2}\.\s)|(?=\(\d{1,2}\))", " " + rek)]
+            poin = [x for x in poin if len(x) > 12 and x.lower() != "rekomendasi"]
+            if poin:
+                return poin
+        except Exception as x:
+            log("  laporan MAGMA gagal dibaca:", type(x).__name__, str(x)[:120])
+    return [p.strip().rstrip("…") for r in (g or {}).get("rekomendasi") or [] for p in re.split(r"\(\d\)", r) if p.strip()]
+
+
+def potong_komentar(judul, poin, batas=470, maks=3):
+    """Poin bernomor dibagi ke beberapa komentar (masing-masing < 500 karakter), paling banyak `maks` komentar."""
+    hasil, kini_ = [], judul
+    for i, p in enumerate(poin, 1):
+        b = f"{i}. {p}"
+        if len(b) > batas - 10:
+            b = b[:batas - 11].rsplit(" ", 1)[0].rstrip(",;") + "…"
+        if len(kini_) + 2 + len(b) > batas:
+            hasil.append(kini_)
+            kini_ = b
+        else:
+            kini_ = f"{kini_}\n\n{b}" if kini_ else b
+    if kini_:
+        hasil.append(kini_)
+    return hasil[:maks]
 
 
 # ---------------------------------------------------------------- state & inti
@@ -227,9 +259,10 @@ def tangani(e, g, st, uji=False, alasan=None, ke=1):
         except Exception as x:
             log(f"  foto gagal (percobaan {coba + 1}):", type(x).__name__, str(x)[:120])
             time.sleep(5)
-    teks = teks_erupsi({**e, "foto": url_foto}, g, alasan, ke)   # "Sumber & foto" hanya bila foto benar-benar ikut
+    teks, komentar = teks_erupsi({**e, "foto": url_foto}, g, alasan, ke)   # "Sumber & foto" hanya bila foto ikut
     GAMBAR.mkdir(parents=True, exist_ok=True)
-    (GAMBAR / f"erupsi_{e['id'][:8]}.txt").write_text(teks, encoding="utf-8")
+    (GAMBAR / f"erupsi_{e['id'][:8]}.txt").write_text(
+        "\n\n".join([teks] + [f"--- komentar {i} ---\n{k}" for i, k in enumerate(komentar, 1)]), encoding="utf-8")
     catatan = {"nama": e["nama"], "waktu": e["waktu"], "gambar": url_foto, "kolom": kolom(e),
                "level": (g or {}).get("level"), "rekom": tanda_rekom(g), "alasan": alasan,
                "ditangani": kini().strftime("%Y-%m-%dT%H:%M:%SZ")}
@@ -240,10 +273,26 @@ def tangani(e, g, st, uji=False, alasan=None, ke=1):
         pid, link = terbitkan(teks, url_foto)
         catatan.update(status="terbit", threads_id=pid, permalink=link)
         log("  TERBIT:", link or pid)
+        for k in komentar:                     # posting utama sudah terbit; komentar gagal tidak diulang
+            try:
+                balas(pid, k)
+            except Exception as x:
+                log("  komentar rekomendasi GAGAL:", type(x).__name__, str(x)[:200])
+                break
     st["erupsi"][e["id"]] = catatan
     if not uji:
         simpan_state(st)
-    return teks
+    return "\n\n".join([teks] + [f"--- komentar {i} ---\n{k}" for i, k in enumerate(komentar, 1)])
+
+
+def balas(pid, teks):
+    """Komentar (balasan) teks di bawah posting kita sendiri."""
+    cid = panggil("me/threads", {"media_type": "TEXT", "text": teks, "reply_to_id": pid})["id"]
+    for _ in range(12):
+        time.sleep(5)
+        if panggil(cid, {"fields": "status"}, post=False).get("status") == "FINISHED":
+            break
+    return panggil("me/threads_publish", {"creation_id": cid})["id"]
 
 
 def lewati(e, g, st, ke, uji=False):
