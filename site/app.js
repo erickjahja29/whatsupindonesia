@@ -2238,7 +2238,7 @@
     { min: 30, nama: "Badai / ekstrem", warna: [239, 68, 68], a: 0.72, rintik: 3 },
   ];
   state.hujan = baca("wui-hujan") === "1";
-  const HJ = { frames: [], i: 0, timer: 0, main: false, memuat: false, kunci: "", batas: null, bandara: [], diperbarui: null };
+  const HJ = { darat: null, frames: [], i: 0, timer: 0, main: false, memuat: false, kunci: "", batas: null, bandara: [], diperbarui: null };
   const mercY = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
   // posisi piksel (pecahan) di citra hujan; citra berproyeksi Web Mercator seperti peta
   function keFramePx(f, lng, lat) {
@@ -2283,6 +2283,10 @@
       if (!r.ok) throw new Error(`hujan.json: ${r.status}`);
       const d = await r.json();
       HJ.batas = d.batas; HJ.bandara = d.bandara || []; HJ.diperbarui = d.diperbarui;
+      if (d.darat && !HJ.darat) {   // masker daratan (sekali): animasi rintik hanya di darat
+        HJ.darat = await muatFrameHujan({ png: d.darat, sah: "", t: "" }).catch(() => null);
+        RT.grid = null;
+      }
       const daftar = d.frame.slice(-HJ_FRAME), kunci = daftar.map((f) => f.png + f.sah).join();
       if (kunci !== HJ.kunci) {
         const lama = new Map(HJ.frames.map((f) => [f.kunci, f]));
@@ -2345,6 +2349,7 @@
     let total = 0;
     for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
       const ll = map.unproject([i * s + s / 2, j * s + s / 2]);
+      if (HJ.darat && !hujanDi(HJ.darat, ll.lng, ll.lat)) continue;   // laut: warna hujan tetap, tanpa rintik
       const k = kelasHujan(hujanDi(f, ll.lng, ll.lat));
       if (!k) continue;
       const ki = HUJAN_KELAS.indexOf(k) + 1;

@@ -12,7 +12,7 @@ Langkah per citra:
  3. Koreksi parallax: awan tinggi tampak bergeser menjauhi titik bawah satelit (140,7° BT); digeser balik.
  4. Frame terbaru: gerak awan dari dua citra berurutan -> hujan digeser ke posisi perkiraan "sekarang".
  5. Koreksi pengamatan bandara (METAR): di sekitar bandara (L = 15 km) perkiraan ditarik ke laporan bandara.
- 6. Hanya daratan Indonesia (+±5 km pantai): hujan di laut tidak ditampilkan.
+ 6. Masker daratan Indonesia (+±5 km pantai) disimpan terpisah (darat.png): animasi rintik hanya di darat.
 Keluaran (nginx /data/hujan/): <waktu>.png (abu-abu: mm/jam = (v/40)^2) + hujan.json (daftar frame, batas peta, bandara).
 """
 import io
@@ -281,7 +281,7 @@ def catat_validasi(t, R, stasiun):
 
 def masker_darat():
     """Daratan Indonesia (poligon kabupaten/kota) di grid citra, dilebarkan ±1 piksel (±5 km) agar pantai ikut.
-    Hujan di laut tidak ditampilkan: fokus pada daerah tempat orang berada."""
+    Dipakai situs agar animasi rintik hanya di darat (warna hujan tetap tampil di laut)."""
     from PIL import ImageDraw
     img = Image.new("L", (W, H), 0)
     d = ImageDraw.Draw(img)
@@ -295,7 +295,14 @@ def masker_darat():
     return np.logical_or.reduce([m] + [np.roll(m, sh, ax) for sh in (-1, 1) for ax in (0, 1)])
 
 
-DARAT = None
+def simpan_darat():
+    p = KELUAR / "darat.png"
+    if p.exists() and time.time() - p.stat().st_mtime < 7 * 86400:
+        return
+    m = masker_darat().astype(np.uint8) * 255
+    tmp = p.with_suffix(".tmp.png")
+    Image.fromarray(m, "L").save(tmp, optimize=True)
+    os.replace(tmp, p)
 
 
 # ---------------------------------------------------------------- utama
@@ -327,10 +334,6 @@ def proses(t, t_sebelum, terbaru, stasiun):
     R, pakai = koreksi_bandara(R, stasiun, t_citra)
     info["sah"] = t_citra.strftime("%Y-%m-%dT%H:%M:%SZ")
     info["png"] = f"{t}.png"
-    global DARAT
-    if DARAT is None:
-        DARAT = masker_darat()
-    R = np.where(DARAT, R, 0)
     simpan_png(R, KELUAR / info["png"])
     info["persen_hujan"] = round(float((R >= 0.3).mean()) * 100, 2)
     return info, pakai
@@ -338,6 +341,10 @@ def proses(t, t_sebelum, terbaru, stasiun):
 
 def main():
     KELUAR.mkdir(parents=True, exist_ok=True)
+    try:
+        simpan_darat()
+    except Exception as e:  # noqa: BLE001
+        log("masker darat gagal:", e)
     jp = KELUAR / "hujan.json"
     lama = json.loads(jp.read_text(encoding="utf-8")) if jp.exists() else {"frame": []}
     sudah = {f["png"][:-4]: f for f in lama.get("frame", [])}
@@ -372,13 +379,13 @@ def main():
                 "wx": s["wx"], "sat": round(s.get("sat", 0), 2)} for s in pakai_baru]
     hasil = {"diperbarui": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "batas": batas(),
              "skala": "mm_per_jam = (nilai/40)^2", "sumber": "Himawari-9 B13 (JMA) + METAR (NOAA AWC)",
-             "frame": frame[-N_FRAME:], "bandara": bandara}
+             "frame": frame[-N_FRAME:], "bandara": bandara, "darat": "darat.png"}
     tmp = jp.with_suffix(".tmp")
     tmp.write_text(json.dumps(hasil, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     os.replace(tmp, jp)
     simpan = {f["png"] for f in hasil["frame"]}
     for p in KELUAR.glob("*.png"):
-        if p.name not in simpan and time.time() - p.stat().st_mtime > 3600:
+        if p.name not in simpan and p.name != "darat.png" and time.time() - p.stat().st_mtime > 3600:
             p.unlink()
 
 
